@@ -1,61 +1,19 @@
-import pandas as pd
-import numpy as np
-from collections import defaultdict
-from nba_api.stats.endpoints import leaguegamefinder, commonallplayers, playerprofilev2
-from sklearn.model_selection import TimeSeriesSplit
-from sklearn.preprocessing import StandardScaler
-from sklearn.feature_selection import SelectFromModel
-import xgboost as xgb
-from sklearn.metrics import accuracy_score, brier_score_loss, roc_auc_score
-from sklearn.neural_network import MLPClassifier
-from typing import List, Dict, Tuple
-import torch
-import torch.nn as nn
-import torch.optim as optim
-from datetime import datetime, timedelta
-import pytz
-from geopy.distance import geodesic
-import time
+from core.predictor import EnhancedNBAPredictor
 
-class DeepNBAPredictor(nn.Module):
-    def __init__(self, input_size):
-        super(DeepNBAPredictor, self).__init__()
-        self.network = nn.Sequential(
-            nn.Linear(input_size, 256),
-            nn.ReLU(),
-            nn.Dropout(0.3),
-            nn.BatchNorm1d(256),
-            nn.Linear(256, 128),
-            nn.ReLU(),
-            nn.Dropout(0.2),
-            nn.BatchNorm1d(128),
-            nn.Linear(128, 64),
-            nn.ReLU(),
-            nn.Dropout(0.1),
-            nn.BatchNorm1d(64),
-            nn.Linear(64, 32),
-            nn.ReLU(),
-            nn.Linear(32, 2)
-        )
+def main():
+    seasons = ['2020-21', '2021-22', '2022-23', '2023-24']
+    predictor = EnhancedNBAPredictor(seasons)
+    
+    try:
+        print("Starting NBA prediction model training...")
+        predictor.run_pipeline()
+        print("Model training completed successfully")
+    except Exception as e:
+        print(f"Error during model training: {e}")
+        raise
 
-    def forward(self, x):
-        return self.network(x)
-
-class EnhancedNBAPredictor:
-    def __init__(self, seasons: List[str]):
-        self.seasons = seasons
-        self.lookback_windows = [7, 14, 30, 60]
-        self.team_ratings_cache = {}
-        self.feature_importances = {}
-        self.selected_features = {}
-        self.feature_importance_summary = {}
-        self.team_locations = self._initialize_team_locations()
-        self.timezone_map = self._initialize_timezone_map()
-
-    def _initialize_team_locations(self) -> Dict:
-        """Initialize NBA team locations with coordinates."""
-        return {
-            'ATL': {'coords': (33.7573, -84.3963), 'timezone': 'America/New_York'},
+if __name__ == "__main__":
+    main()
             'BOS': {'coords': (42.3662, -71.0621), 'timezone': 'America/New_York'},
             'BKN': {'coords': (40.6828, -73.9758), 'timezone': 'America/New_York'},
             'CHA': {'coords': (35.2251, -80.8392), 'timezone': 'America/New_York'},
