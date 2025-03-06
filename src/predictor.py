@@ -295,10 +295,23 @@ class EnhancedNBAPredictor:
             # Create mock models that will just return default predictions
             if self.use_enhanced_models:
                 from sklearn.dummy import DummyClassifier
-                dummy = DummyClassifier(strategy='constant', constant=0.5)
-                X = self.features.iloc[:, :5]  # Use a few columns for dummy training
-                y = np.zeros(len(X))  # Create a dummy target
+                # Use 'most_frequent' strategy instead of 'constant' to avoid errors
+                dummy = DummyClassifier(strategy='most_frequent')
+                # Get a few numeric columns for dummy training
+                numeric_cols = [col for col in self.features.columns 
+                               if col not in ['GAME_DATE', 'TARGET'] and self.features[col].dtype in [np.float64, np.int64]]
+                X = self.features[numeric_cols[:5] if len(numeric_cols) >= 5 else numeric_cols]
+                
+                # Create a dummy target
+                y = np.zeros(len(X), dtype=int)  # Ensure integer type for classification
                 dummy.fit(X, y)
+                
+                # Create simple prediction function that always returns 0.5
+                def predict_proba(X):
+                    return np.array([[0.5, 0.5]] * len(X))
+                
+                # Add the predict_proba method to our dummy
+                dummy.predict_proba = predict_proba
                 
                 # Set dummy models for prediction
                 self.ensemble_model.models = {'dummy': dummy}

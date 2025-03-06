@@ -90,7 +90,11 @@ class FeatureTransformer:
         Returns:
             DataFrame with transformed features
         """
+        # Make a copy to start with
         result = features.copy()
+        
+        # Create a dictionary to store all new features we'll add
+        new_features = {}
         
         # Process each registered feature that needs transformation
         for feature_name in self.required_features:
@@ -111,29 +115,42 @@ class FeatureTransformer:
                     
                 # Generate the feature based on its type
                 if feature_info['type'] == 'derived':
-                    self._derive_feature(result, feature_name, feature_info, window)
+                    new_value = self._derive_feature_value(result, feature_name, feature_info, window)
+                    if new_value is not None:
+                        new_features[feature_name] = new_value
                 elif feature_info['type'] == 'interaction':
-                    self._create_interaction_feature(result, feature_name, feature_info)
+                    new_value = self._create_interaction_feature_value(result, feature_name, feature_info)
+                    if new_value is not None:
+                        new_features[feature_name] = new_value
+        
+        # Add all new features at once to avoid fragmentation
+        if new_features:
+            # Convert to DataFrame and join with original features
+            new_features_df = pd.DataFrame(new_features, index=result.index)
+            result = pd.concat([result, new_features_df], axis=1)
                     
         return result
-    
-    def _derive_feature(self, df: pd.DataFrame, feature_name: str, 
-                       feature_info: Dict, window: str = None) -> None:
+        
+    def _derive_feature_value(self, df: pd.DataFrame, feature_name: str, 
+                      feature_info: Dict, window: str = None) -> pd.Series:
         """
-        Derive a feature based on its definition and dependencies.
+        Derive a feature value based on its definition and dependencies.
         
         Args:
-            df: DataFrame to modify
+            df: Source DataFrame with dependencies
             feature_name: Name of the feature to derive
             feature_info: Feature information from registry
             window: Time window (if applicable)
+            
+        Returns:
+            pd.Series containing the derived feature values
         """
         # Handle specific feature derivations based on feature type
         base_name = self._get_base_feature_name(feature_name)
         
         # Skip if feature already exists
         if feature_name in df.columns:
-            return
+            return None
             
         # Generate windowed column names for dependencies
         dependencies = []
@@ -144,23 +161,23 @@ class FeatureTransformer:
                 dependencies.append(dep)
                 
         # Skip if any dependencies are missing
-        if not all(dep in df.columns for dep in dependencies):
-            # Use default values for missing dependencies
-            for dep in dependencies:
-                if dep not in df.columns:
-                    df[dep] = 0
+        missing_deps = [dep for dep in dependencies if dep not in df.columns]
+        if missing_deps:
+            # Add default values for missing dependencies
+            for dep in missing_deps:
+                df[dep] = 0
         
         # Derive specific features
         if base_name == 'WIN_PCT_DIFF':
-            # Get windoweq column names
+            # Get windowed column names
             home_col = dependencies[0]  # WIN_PCT_HOME_{window}D
             away_col = dependencies[1]  # WIN_PCT_AWAY_{window}D
-            df[feature_name] = df[home_col] - df[away_col]
+            return df[home_col] - df[away_col]
             
         elif base_name in ['OFF_RTG_DIFF', 'DEF_RTG_DIFF', 'NET_RTG_DIFF', 'PACE_DIFF']:
             home_col = dependencies[0]  # RTG_mean_HOME_{window}D
             away_col = dependencies[1]  # RTG_mean_AWAY_{window}D
-            df[feature_name] = df[home_col] - df[away_col]
+            return df[home_col] - df[away_col]
             
         elif base_name == 'EFF_DIFF':
             pts_home = dependencies[0]  # PTS_mean_HOME_{window}D
@@ -171,70 +188,75 @@ class FeatureTransformer:
             # Calculate efficiency (points per turnover)
             home_eff = safe_divide(df[pts_home], df[tov_home], index=df.index)
             away_eff = safe_divide(df[pts_away], df[tov_away], index=df.index)
-            df[feature_name] = home_eff - away_eff
+            return home_eff - away_eff
             
         elif base_name == 'HOME_CONSISTENCY':
             pts_std = dependencies[0]  # PTS_std_HOME_{window}D
             pts_mean = dependencies[1]  # PTS_mean_HOME_{window}D
-            df[feature_name] = safe_divide(df[pts_std], df[pts_mean], index=df.index)
+            return safe_divide(df[pts_std], df[pts_mean], index=df.index)
             
         elif base_name == 'AWAY_CONSISTENCY':
             pts_std = dependencies[0]  # PTS_std_AWAY_{window}D
             pts_mean = dependencies[1]  # PTS_mean_AWAY_{window}D
-            df[feature_name] = safe_divide(df[pts_std], df[pts_mean], index=df.index)
+            return safe_divide(df[pts_std], df[pts_mean], index=df.index)
             
         elif base_name == 'FATIGUE_DIFF':
             home_col = dependencies[0]  # FATIGUE_HOME_{window}D
             away_col = dependencies[1]  # FATIGUE_AWAY_{window}D
-            df[feature_name] = df[home_col] - df[away_col]
+            return df[home_col] - df[away_col]
             
         elif base_name == 'REST_DIFF':
             rest_home = dependencies[0]  # REST_DAYS_HOME
             rest_away = dependencies[1]  # REST_DAYS_AWAY
-            df[feature_name] = df[rest_home] - df[rest_away]
+            return df[rest_home] - df[rest_away]
             
         elif base_name == 'H2H_RECENCY_WEIGHT':
             h2h_win_pct = dependencies[0]  # H2H_WIN_PCT
             days_since = dependencies[1]  # DAYS_SINCE_H2H
-            df[feature_name] = safe_divide(
+            return safe_divide(
                 df[h2h_win_pct],
                 np.log1p(df[days_since]),
                 fill_value=0.5,
                 index=df.index
             )
+            
+        return None  # Default if no specific derivation is defined
     
-    def _create_interaction_feature(self, df: pd.DataFrame, feature_name: str, 
-                                  feature_info: Dict) -> None:
+    def _create_interaction_feature_value(self, df: pd.DataFrame, feature_name: str, 
+                                 feature_info: Dict) -> pd.Series:
         """
-        Create an interaction feature between multiple input features.
+        Create an interaction feature value between multiple input features.
         
         Args:
-            df: DataFrame to modify
+            df: Source DataFrame with dependencies
             feature_name: Name of the interaction feature
             feature_info: Feature information from registry
+            
+        Returns:
+            pd.Series containing the interaction feature values
         """
         # Skip if feature already exists
         if feature_name in df.columns:
-            return
+            return None
             
         # Ensure all dependencies exist
         dependencies = feature_info['dependencies']
-        if not all(dep in df.columns for dep in dependencies):
-            # Use default values for missing dependencies
-            for dep in dependencies:
-                if dep not in df.columns:
-                    df[dep] = 0
+        missing_deps = [dep for dep in dependencies if dep not in df.columns]
+        if missing_deps:
+            # Add default values for missing dependencies
+            for dep in missing_deps:
+                df[dep] = 0
         
         # Handle specific interaction features
         if feature_name == 'FATIGUE_TRAVEL_INTERACTION':
             fatigue_diff = dependencies[0]  # FATIGUE_DIFF_14D
             travel_dist = dependencies[1]  # TRAVEL_DISTANCE
-            df[feature_name] = df[fatigue_diff] * df[travel_dist] / 1000
+            return df[fatigue_diff] * df[travel_dist] / 1000
             
         elif feature_name == 'MOMENTUM_REST_INTERACTION':
             win_pct_diff = dependencies[0]  # WIN_PCT_DIFF_30D
             rest_diff = dependencies[1]  # REST_DIFF
-            df[feature_name] = df[win_pct_diff] * df[rest_diff]
+            return df[win_pct_diff] * df[rest_diff]
             
         elif feature_name == 'MATCHUP_COMPATIBILITY':
             pace_home = dependencies[0]  # PACE_mean_HOME_30D
@@ -249,7 +271,7 @@ class FeatureTransformer:
             fg3_similarity = 1.0 / (1.0 + abs(df[fg3a_home] - df[fg3a_away]))
             
             # Combine into a single metric (higher = more similar styles)
-            df[feature_name] = (pace_similarity + fg3_similarity) / 2.0
+            return (pace_similarity + fg3_similarity) / 2.0
             
         elif feature_name == 'STYLE_ADVANTAGE':
             pace_home = dependencies[0]  # PACE_mean_HOME_30D
@@ -264,7 +286,7 @@ class FeatureTransformer:
             shooting_advantage = (df[fg3_pct_home] - df[fg3_pct_away]) / (df[fg3_pct_home] + df[fg3_pct_away] + 0.001)
             
             # Combine into a style advantage metric
-            df[feature_name] = pace_advantage + shooting_advantage
+            return pace_advantage + shooting_advantage
             
         elif feature_name == 'MATCHUP_HISTORY_SCORE':
             h2h_win_pct = dependencies[0]  # H2H_WIN_PCT
@@ -276,7 +298,7 @@ class FeatureTransformer:
             normalized_margin = normalized_margin.clip(-1, 1)
             
             # Combine into a weighted matchup score
-            df[feature_name] = (
+            return (
                 0.5 * df[h2h_win_pct] +  # 50% weight on win percentage
                 0.3 * normalized_margin +  # 30% weight on scoring margin
                 0.2 * df[h2h_momentum]    # 20% weight on recent momentum
@@ -291,15 +313,51 @@ class FeatureTransformer:
             
             # Combine distance and timezone effect
             # Timezone changes have more impact than pure distance
-            df[feature_name] = normalized_distance + (abs(df[timezone_diff]) * 0.5)
-            df[feature_name] = df[feature_name].clip(0, 1)  # Scale 0-1
+            fatigue = normalized_distance + (abs(df[timezone_diff]) * 0.5)
+            return fatigue.clip(0, 1)  # Scale 0-1
             
         elif feature_name == 'LINEUP_IMPACT_DIFF':
             home_impact = dependencies[0]  # LINEUP_IMPACT_HOME
             away_impact = dependencies[1]  # LINEUP_IMPACT_AWAY
             
             # Simple difference in lineup impact scores
-            df[feature_name] = df[home_impact] - df[away_impact]
+            return df[home_impact] - df[away_impact]
+            
+        return None  # Default if no specific interaction is defined
+    
+    # The old implementation methods are now deprecated in favor of methods that avoid DataFrame fragmentation
+    def _derive_feature(self, df: pd.DataFrame, feature_name: str, 
+                       feature_info: Dict, window: str = None) -> None:
+        """
+        DEPRECATED: Use _derive_feature_value instead.
+        This method modifies the DataFrame in-place, leading to fragmentation.
+        
+        Args:
+            df: DataFrame to modify
+            feature_name: Name of the feature to derive
+            feature_info: Feature information from registry
+            window: Time window (if applicable)
+        """
+        # Get the value from the new method
+        value = self._derive_feature_value(df, feature_name, feature_info, window)
+        if value is not None:
+            df[feature_name] = value
+    
+    def _create_interaction_feature(self, df: pd.DataFrame, feature_name: str, 
+                                  feature_info: Dict) -> None:
+        """
+        DEPRECATED: Use _create_interaction_feature_value instead.
+        This method modifies the DataFrame in-place, leading to fragmentation.
+        
+        Args:
+            df: DataFrame to modify
+            feature_name: Name of the interaction feature
+            feature_info: Feature information from registry
+        """
+        # Get the value from the new method
+        value = self._create_interaction_feature_value(df, feature_name, feature_info)
+        if value is not None:
+            df[feature_name] = value
     
     def _get_base_feature_name(self, feature_name: str) -> str:
         """
