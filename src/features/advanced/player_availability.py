@@ -41,49 +41,102 @@ class PlayerAvailabilityProcessor:
         """
         print("Calculating player availability impact features...")
         
-        # Initialize results DataFrame
-        player_features = pd.DataFrame({
-            'GAME_DATE': pd.to_datetime(games['GAME_DATE_HOME']),
-            'TEAM_ID_HOME': games['TEAM_ID_HOME'],
-            'TEAM_ID_AWAY': games['TEAM_ID_AWAY']
-        })
+        # Validate input data
+        if games is None or len(games) == 0:
+            print("Warning: No game data provided for player availability calculation")
+            # Return empty DataFrame with expected structure
+            return pd.DataFrame(columns=[
+                'GAME_DATE', 'TEAM_ID_HOME', 'TEAM_ID_AWAY', 
+                'PLAYER_IMPACT_HOME', 'PLAYER_IMPACT_AWAY', 'PLAYER_IMPACT_DIFF',
+                'PLAYER_IMPACT_HOME_MOMENTUM', 'PLAYER_IMPACT_AWAY_MOMENTUM', 'PLAYER_IMPACT_MOMENTUM_DIFF'
+            ])
         
-        # Calculate player impact scores (would use real data in production)
-        # For now, we'll simulate this with an algorithm that estimates player impact
-        player_impact_scores = self._calculate_player_impact_scores(games)
+        # Ensure required columns exist
+        required_cols = ['GAME_DATE_HOME', 'TEAM_ID_HOME', 'TEAM_ID_AWAY']
+        missing_cols = [col for col in required_cols if col not in games.columns]
+        if missing_cols:
+            print(f"Warning: Missing required columns for player availability calculation: {missing_cols}")
+            # Return empty DataFrame with expected structure
+            return pd.DataFrame(columns=[
+                'GAME_DATE', 'TEAM_ID_HOME', 'TEAM_ID_AWAY', 
+                'PLAYER_IMPACT_HOME', 'PLAYER_IMPACT_AWAY', 'PLAYER_IMPACT_DIFF',
+                'PLAYER_IMPACT_HOME_MOMENTUM', 'PLAYER_IMPACT_AWAY_MOMENTUM', 'PLAYER_IMPACT_MOMENTUM_DIFF'
+            ])
         
-        # Initialize player impact columns with default values
-        player_features['PLAYER_IMPACT_HOME'] = 1.0
-        player_features['PLAYER_IMPACT_AWAY'] = 1.0
-        
-        # Simulate player availability data (would use real data from NBA API)
-        availability_data = self._simulate_player_availability(games)
-        
-        # Calculate impact for each game
-        for idx, row in games.iterrows():
-            game_date = pd.to_datetime(row['GAME_DATE_HOME'])
-            home_team = row['TEAM_ID_HOME']
-            away_team = row['TEAM_ID_AWAY']
+        try:
+            # Initialize results DataFrame
+            player_features = pd.DataFrame({
+                'GAME_DATE': pd.to_datetime(games['GAME_DATE_HOME']),
+                'TEAM_ID_HOME': games['TEAM_ID_HOME'],
+                'TEAM_ID_AWAY': games['TEAM_ID_AWAY']
+            })
             
-            # Get available players for this game (would use real data in production)
-            home_available = self._get_available_players(home_team, game_date, availability_data)
-            away_available = self._get_available_players(away_team, game_date, availability_data)
+            # Calculate player impact scores (would use real data in production)
+            # For now, we'll simulate this with an algorithm that estimates player impact
+            player_impact_scores = self._calculate_player_impact_scores(games)
             
-            # Calculate impact scores
-            home_impact = self._calculate_team_strength(home_team, home_available, player_impact_scores)
-            away_impact = self._calculate_team_strength(away_team, away_available, player_impact_scores)
+            # Initialize player impact columns with default values
+            player_features['PLAYER_IMPACT_HOME'] = 1.0
+            player_features['PLAYER_IMPACT_AWAY'] = 1.0
             
-            # Store in features DataFrame
-            player_features.loc[idx, 'PLAYER_IMPACT_HOME'] = home_impact
-            player_features.loc[idx, 'PLAYER_IMPACT_AWAY'] = away_impact
-        
-        # Add derived features
-        player_features['PLAYER_IMPACT_DIFF'] = player_features['PLAYER_IMPACT_HOME'] - player_features['PLAYER_IMPACT_AWAY']
-        
-        # Add impact momentum (changes in availability over time)
-        player_features = self._add_impact_momentum(player_features)
-        
-        return player_features
+            # Simulate player availability data (would use real data from NBA API)
+            availability_data = self._simulate_player_availability(games)
+            
+            # Calculate impact for each game
+            for idx, row in games.iterrows():
+                game_date = pd.to_datetime(row['GAME_DATE_HOME'])
+                home_team = row['TEAM_ID_HOME']
+                away_team = row['TEAM_ID_AWAY']
+                
+                # Get available players for this game (would use real data in production)
+                home_available = self._get_available_players(home_team, game_date, availability_data)
+                away_available = self._get_available_players(away_team, game_date, availability_data)
+                
+                # Calculate impact scores
+                home_impact = self._calculate_team_strength(home_team, home_available, player_impact_scores)
+                away_impact = self._calculate_team_strength(away_team, away_available, player_impact_scores)
+                
+                # Store in features DataFrame
+                player_features.loc[idx, 'PLAYER_IMPACT_HOME'] = home_impact
+                player_features.loc[idx, 'PLAYER_IMPACT_AWAY'] = away_impact
+            
+            # Add derived features
+            player_features['PLAYER_IMPACT_DIFF'] = player_features['PLAYER_IMPACT_HOME'] - player_features['PLAYER_IMPACT_AWAY']
+            
+            # Add impact momentum (changes in availability over time)
+            player_features = self._add_impact_momentum(player_features)
+            
+            # Ensure all expected columns are present
+            expected_cols = [
+                'PLAYER_IMPACT_HOME', 'PLAYER_IMPACT_AWAY', 'PLAYER_IMPACT_DIFF',
+                'PLAYER_IMPACT_HOME_MOMENTUM', 'PLAYER_IMPACT_AWAY_MOMENTUM', 'PLAYER_IMPACT_MOMENTUM_DIFF',
+                'PLAYER_IMPACT_HOME_3G_AVG', 'PLAYER_IMPACT_AWAY_3G_AVG'
+            ]
+            
+            for col in expected_cols:
+                if col not in player_features.columns:
+                    print(f"Adding missing column {col}")
+                    player_features[col] = 1.0 if 'MOMENTUM' in col else 0.0
+            
+            return player_features
+            
+        except Exception as e:
+            print(f"Error calculating player availability features: {e}")
+            # Return DataFrame with default values
+            default_features = pd.DataFrame({
+                'GAME_DATE': pd.to_datetime(games['GAME_DATE_HOME']),
+                'TEAM_ID_HOME': games['TEAM_ID_HOME'],
+                'TEAM_ID_AWAY': games['TEAM_ID_AWAY'],
+                'PLAYER_IMPACT_HOME': 1.0,
+                'PLAYER_IMPACT_AWAY': 1.0,
+                'PLAYER_IMPACT_DIFF': 0.0,
+                'PLAYER_IMPACT_HOME_MOMENTUM': 1.0,
+                'PLAYER_IMPACT_AWAY_MOMENTUM': 1.0,
+                'PLAYER_IMPACT_MOMENTUM_DIFF': 0.0,
+                'PLAYER_IMPACT_HOME_3G_AVG': 1.0,
+                'PLAYER_IMPACT_AWAY_3G_AVG': 1.0
+            })
+            return default_features
     
     def _calculate_player_impact_scores(self, games: pd.DataFrame) -> Dict:
         """

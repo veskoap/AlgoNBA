@@ -262,15 +262,39 @@ class EnhancedNBAPredictor:
         print("Calculating player availability impact...")
         player_features = self.player_processor.calculate_player_impact_features(self.games)
         
-        # Merge player features with team stats
-        self.stats_df = self.stats_df.merge(
-            player_features,
-            on=['GAME_DATE', 'TEAM_ID_HOME', 'TEAM_ID_AWAY'],
-            how='left'
-        )
-        
+        # First check if player_features has data before attempting merge
+        if player_features is not None and not player_features.empty:
+            # Log merge details
+            print(f"Merging player availability data with {len(player_features)} records")
+            
+            # Ensure both dataframes have matching dtypes for merge columns
+            for col in ['GAME_DATE', 'TEAM_ID_HOME', 'TEAM_ID_AWAY']:
+                if col in player_features.columns and col in self.stats_df.columns:
+                    # Ensure consistent types for merge columns
+                    if player_features[col].dtype != self.stats_df[col].dtype:
+                        print(f"Converting {col} in player_features from {player_features[col].dtype} to {self.stats_df[col].dtype}")
+                        player_features[col] = player_features[col].astype(self.stats_df[col].dtype)
+            
+            # Merge player features with team stats
+            original_len = len(self.stats_df)
+            try:
+                self.stats_df = self.stats_df.merge(
+                    player_features,
+                    on=['GAME_DATE', 'TEAM_ID_HOME', 'TEAM_ID_AWAY'],
+                    how='left'
+                )
+                merged_len = len(self.stats_df)
+                if merged_len != original_len:
+                    print(f"Warning: Merge changed dataframe length from {original_len} to {merged_len}")
+            except Exception as e:
+                print(f"Error merging player availability data: {e}")
+                # Handle the error by continuing without merging
+        else:
+            print("No player availability data found to merge")
+            
         # Fill missing player impact with default values
         if 'PLAYER_IMPACT_HOME' not in self.stats_df.columns:
+            print("Adding default values for player availability columns")
             self.stats_df['PLAYER_IMPACT_HOME'] = 1.0
         if 'PLAYER_IMPACT_AWAY' not in self.stats_df.columns:
             self.stats_df['PLAYER_IMPACT_AWAY'] = 1.0
