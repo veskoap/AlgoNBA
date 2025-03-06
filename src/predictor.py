@@ -238,25 +238,51 @@ class EnhancedNBAPredictor:
             
         print(f"Preparing prediction for {home_team_id} (home) vs {away_team_id} (away) on {game_date}")
             
-        # Find the most recent entry for both teams
+        # Find the most recent entry for both teams - critically ensure we use data strictly before game_date to prevent data leakage
         home_stats = self.stats_df[
             (self.stats_df['TEAM_ID_HOME'] == home_team_id) & 
-            (self.stats_df['GAME_DATE'] <= game_date)
+            (self.stats_df['GAME_DATE'] < game_date)  # Changed <= to < to prevent data leakage
         ].sort_values('GAME_DATE', ascending=False).iloc[0].copy() if not self.stats_df[
             (self.stats_df['TEAM_ID_HOME'] == home_team_id) & 
-            (self.stats_df['GAME_DATE'] <= game_date)
+            (self.stats_df['GAME_DATE'] < game_date)  # Changed <= to < to prevent data leakage
         ].empty else pd.Series()
         
         away_stats = self.stats_df[
             (self.stats_df['TEAM_ID_AWAY'] == away_team_id) & 
-            (self.stats_df['GAME_DATE'] <= game_date)
+            (self.stats_df['GAME_DATE'] < game_date)  # Changed <= to < to prevent data leakage
         ].sort_values('GAME_DATE', ascending=False).iloc[0].copy() if not self.stats_df[
             (self.stats_df['TEAM_ID_AWAY'] == away_team_id) & 
-            (self.stats_df['GAME_DATE'] <= game_date)
+            (self.stats_df['GAME_DATE'] < game_date)  # Changed <= to < to prevent data leakage
         ].empty else pd.Series()
         
         if home_stats.empty or away_stats.empty:
-            raise ValueError("Not enough data available for one or both teams.")
+            # Try to find stats where these teams played in other positions
+            alt_home_stats = self.stats_df[
+                (self.stats_df['TEAM_ID_AWAY'] == home_team_id) & 
+                (self.stats_df['GAME_DATE'] < game_date)
+            ].sort_values('GAME_DATE', ascending=False)
+            
+            alt_away_stats = self.stats_df[
+                (self.stats_df['TEAM_ID_HOME'] == away_team_id) & 
+                (self.stats_df['GAME_DATE'] < game_date)
+            ].sort_values('GAME_DATE', ascending=False)
+            
+            # Use alternate data if available
+            if home_stats.empty and not alt_home_stats.empty:
+                print(f"Using away stats for home team {home_team_id}")
+                home_stats = alt_home_stats.iloc[0].rename(
+                    lambda x: x.replace('_AWAY', '_HOME') if '_AWAY' in x else x
+                ).copy()
+                
+            if away_stats.empty and not alt_away_stats.empty:
+                print(f"Using home stats for away team {away_team_id}")
+                away_stats = alt_away_stats.iloc[0].rename(
+                    lambda x: x.replace('_HOME', '_AWAY') if '_HOME' in x else x
+                ).copy()
+            
+            # If still no data, raise error
+            if home_stats.empty or away_stats.empty:
+                raise ValueError("Not enough data available for one or both teams.")
             
         # Create a new game entry with these teams
         new_game = pd.Series({
@@ -265,7 +291,7 @@ class EnhancedNBAPredictor:
             'TEAM_ID_AWAY': away_team_id
         })
         
-        # For simplicity, copy all features from the most recent games
+        # Copy features from the most recent games, using only historical data
         for col in home_stats.index:
             if col not in new_game and '_HOME' in col:
                 new_game[col] = home_stats[col]
@@ -274,11 +300,11 @@ class EnhancedNBAPredictor:
             if col not in new_game and '_AWAY' in col:
                 new_game[col] = away_stats[col]
                 
-        # Add head-to-head features
+        # Add head-to-head features - ensuring we only use data strictly before game_date
         h2h_stats = self.stats_df[
             (self.stats_df['TEAM_ID_HOME'] == home_team_id) & 
             (self.stats_df['TEAM_ID_AWAY'] == away_team_id) &
-            (self.stats_df['GAME_DATE'] <= game_date)
+            (self.stats_df['GAME_DATE'] < game_date)  # Changed <= to < to prevent data leakage
         ].sort_values('GAME_DATE', ascending=False)
         
         if not h2h_stats.empty:

@@ -53,14 +53,21 @@ class NBADataLoader:
         home = df[df['MATCHUP'].str.contains('vs')].copy()
         away = df[df['MATCHUP'].str.contains('@')].copy()
 
-        # Merge games data
+        # Merge games data - ensuring we only merge exact game matches
         games = pd.merge(
             home[BASIC_STATS_COLUMNS].add_suffix('_HOME'),
             away[BASIC_STATS_COLUMNS].add_suffix('_AWAY'),
             left_on=['GAME_ID_HOME'],
-            right_on=['GAME_ID_AWAY']
+            right_on=['GAME_ID_AWAY'],
+            how='inner'  # Only keep exact matches
         )
 
+        # Validate that game dates match between home and away records
+        date_mismatch = (games['GAME_DATE_HOME'] != games['GAME_DATE_AWAY']).sum()
+        if date_mismatch > 0:
+            print(f"Warning: {date_mismatch} games have mismatched dates between home and away records")
+            
+        # Sort chronologically to prevent any data leakage from future games
         games = games.sort_values('GAME_DATE_HOME')
         print(f"Retrieved {len(games)} games with enhanced statistics")
 

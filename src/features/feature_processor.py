@@ -387,11 +387,13 @@ class NBAFeatureProcessor:
 
             stats_df = team_games.set_index('GAME_DATE').sort_index()
 
-            # Rolling statistics
+            # Rolling statistics - use closed='left' to exclude current day
+            # This ensures we only use data strictly before the current date for each calculation
+            # preventing any form of data leakage from future games
             rolling_stats = stats_df.groupby('TEAM_ID').rolling(
                 window=f'{window}D',
                 min_periods=1,
-                closed='left'
+                closed='left'  # Ensures only data prior to current day is used
             ).agg({
                 'WIN': ['count', 'mean'],
                 'IS_HOME': 'mean',
