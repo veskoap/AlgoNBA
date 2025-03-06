@@ -664,12 +664,12 @@ class NBADataLoader:
                                     
                                     team_players = dashboard[0]
                                 except Exception as e2:
-                                # Fallback to standard dashboard
-                                team_players = teamplayerdashboard.TeamPlayerDashboard(
-                                    team_id=team_id,
-                                    season=season,
-                                    per_mode_simple='PerGame'
-                                ).get_data_frames()[1]  # [1] contains individual player data
+                                    # Fallback to standard dashboard
+                                    team_players = teamplayerdashboard.TeamPlayerDashboard(
+                                        team_id=team_id,
+                                        season=season,
+                                        per_mode_simple='PerGame'
+                                    ).get_data_frames()[1]  # [1] contains individual player data
                         except:
                             try:
                                 # Second attempt with standard parameters
