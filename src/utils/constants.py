@@ -72,6 +72,207 @@ FEATURE_GROUPS = {
     'H2H': 'Head-to-head matchups'
 }
 
+# Comprehensive feature registry for the NBA prediction system
+FEATURE_REGISTRY = {
+    # Win percentage features
+    'WIN_PCT_HOME': {
+        'type': 'base',
+        'description': 'Home team win percentage',
+        'windows': DEFAULT_LOOKBACK_WINDOWS,
+    },
+    'WIN_PCT_AWAY': {
+        'type': 'base',
+        'description': 'Away team win percentage',
+        'windows': DEFAULT_LOOKBACK_WINDOWS,
+    },
+    'WIN_PCT_DIFF': {
+        'type': 'derived',
+        'description': 'Difference in win percentage (home - away)',
+        'windows': DEFAULT_LOOKBACK_WINDOWS,
+        'dependencies': ['WIN_PCT_HOME', 'WIN_PCT_AWAY'],
+    },
+    
+    # Rating metrics
+    'OFF_RTG_DIFF': {
+        'type': 'derived',
+        'description': 'Difference in offensive rating',
+        'windows': DEFAULT_LOOKBACK_WINDOWS,
+        'dependencies': ['OFF_RTG_mean_HOME', 'OFF_RTG_mean_AWAY'],
+    },
+    'DEF_RTG_DIFF': {
+        'type': 'derived',
+        'description': 'Difference in defensive rating',
+        'windows': DEFAULT_LOOKBACK_WINDOWS,
+        'dependencies': ['DEF_RTG_mean_HOME', 'DEF_RTG_mean_AWAY'],
+    },
+    'NET_RTG_DIFF': {
+        'type': 'derived',
+        'description': 'Difference in net rating',
+        'windows': DEFAULT_LOOKBACK_WINDOWS,
+        'dependencies': ['NET_RTG_mean_HOME', 'NET_RTG_mean_AWAY'],
+    },
+    'PACE_DIFF': {
+        'type': 'derived',
+        'description': 'Difference in pace',
+        'windows': DEFAULT_LOOKBACK_WINDOWS,
+        'dependencies': ['PACE_mean_HOME', 'PACE_mean_AWAY'],
+    },
+    
+    # Efficiency metrics
+    'EFF_DIFF': {
+        'type': 'derived',
+        'description': 'Difference in points to turnover ratio',
+        'windows': DEFAULT_LOOKBACK_WINDOWS,
+        'dependencies': ['PTS_mean_HOME', 'PTS_mean_AWAY', 'TOV_mean_HOME', 'TOV_mean_AWAY'],
+    },
+    'HOME_CONSISTENCY': {
+        'type': 'derived',
+        'description': 'Home team scoring consistency (std/mean)',
+        'windows': DEFAULT_LOOKBACK_WINDOWS,
+        'dependencies': ['PTS_std_HOME', 'PTS_mean_HOME'],
+    },
+    'AWAY_CONSISTENCY': {
+        'type': 'derived',
+        'description': 'Away team scoring consistency (std/mean)',
+        'windows': DEFAULT_LOOKBACK_WINDOWS,
+        'dependencies': ['PTS_std_AWAY', 'PTS_mean_AWAY'],
+    },
+    
+    # Fatigue and rest features
+    'FATIGUE_DIFF': {
+        'type': 'derived',
+        'description': 'Difference in team fatigue levels',
+        'windows': DEFAULT_LOOKBACK_WINDOWS,
+        'dependencies': ['FATIGUE_HOME', 'FATIGUE_AWAY'],
+    },
+    'REST_DIFF': {
+        'type': 'derived',
+        'description': 'Difference in rest days',
+        'windows': None,
+        'dependencies': ['REST_DAYS_HOME', 'REST_DAYS_AWAY'],
+    },
+    
+    # Momentum features
+    'WIN_MOMENTUM': {
+        'type': 'derived',
+        'description': 'Ratio of recent to longer-term win percentage',
+        'windows': [14, 30, 60],  # Excludes smallest window
+        'dependencies': ['WIN_PCT_HOME', 'WIN_PCT_AWAY'],
+    },
+    'SCORING_MOMENTUM': {
+        'type': 'derived',
+        'description': 'Ratio of recent to longer-term scoring',
+        'windows': [14, 30, 60],  # Excludes smallest window
+        'dependencies': ['PTS_mean_HOME', 'PTS_mean_AWAY'],
+    },
+    
+    # Head-to-head features
+    'H2H_WIN_PCT': {
+        'type': 'h2h',
+        'description': 'Win percentage in head-to-head matchups',
+        'windows': None,
+        'dependencies': [],
+    },
+    'H2H_GAMES': {
+        'type': 'h2h',
+        'description': 'Number of head-to-head games',
+        'windows': None,
+        'dependencies': [],
+    },
+    'DAYS_SINCE_H2H': {
+        'type': 'h2h',
+        'description': 'Days since last head-to-head matchup',
+        'windows': None,
+        'dependencies': [],
+    },
+    'LAST_GAME_HOME_ADVANTAGE': {
+        'type': 'h2h',
+        'description': 'Whether the last h2h game was at home',
+        'windows': None,
+        'dependencies': ['LAST_GAME_HOME'],
+    },
+    'H2H_RECENCY_WEIGHT': {
+        'type': 'derived',
+        'description': 'Head-to-head win percentage weighted by recency',
+        'windows': None,
+        'dependencies': ['H2H_WIN_PCT', 'DAYS_SINCE_H2H'],
+    },
+    
+    # Enhanced head-to-head features
+    'H2H_AVG_MARGIN': {
+        'type': 'h2h',
+        'description': 'Average margin in head-to-head games',
+        'windows': None,
+        'dependencies': [],
+    },
+    'H2H_STREAK': {
+        'type': 'h2h',
+        'description': 'Current streak in head-to-head games',
+        'windows': None,
+        'dependencies': [],
+    },
+    'H2H_HOME_ADVANTAGE': {
+        'type': 'h2h',
+        'description': 'Home advantage in head-to-head games',
+        'windows': None,
+        'dependencies': [],
+    },
+    'H2H_MOMENTUM': {
+        'type': 'h2h',
+        'description': 'Momentum in head-to-head matchups',
+        'windows': None,
+        'dependencies': [],
+    },
+    
+    # Composite features
+    'RECENT_VS_LONG_TERM_HOME': {
+        'type': 'composite',
+        'description': 'Ratio of recent to long-term home performance',
+        'windows': None,
+        'dependencies': ['WIN_mean_HOME'],
+    },
+    'RECENT_VS_LONG_TERM_AWAY': {
+        'type': 'composite',
+        'description': 'Ratio of recent to long-term away performance',
+        'windows': None,
+        'dependencies': ['WIN_mean_AWAY'],
+    },
+    'HOME_AWAY_CONSISTENCY_30D': {
+        'type': 'composite',
+        'description': 'Consistency between home and away performance',
+        'windows': None,
+        'dependencies': ['WIN_mean_HOME_30D', 'WIN_mean_AWAY_30D'],
+    },
+    
+    # Travel impact features
+    'TRAVEL_DISTANCE': {
+        'type': 'travel',
+        'description': 'Distance traveled',
+        'windows': None,
+        'dependencies': [],
+    },
+    'TIMEZONE_DIFF': {
+        'type': 'travel',
+        'description': 'Timezone difference',
+        'windows': None,
+        'dependencies': [],
+    },
+    
+    # Interaction features
+    'FATIGUE_TRAVEL_INTERACTION': {
+        'type': 'interaction',
+        'description': 'Interaction between fatigue and travel distance',
+        'windows': None,
+        'dependencies': ['FATIGUE_DIFF_14D', 'TRAVEL_DISTANCE'],
+    },
+    'MOMENTUM_REST_INTERACTION': {
+        'type': 'interaction',
+        'description': 'Interaction between momentum and rest advantage',
+        'windows': None,
+        'dependencies': ['WIN_PCT_DIFF_30D', 'REST_DIFF'],
+    }
+}
+
 # Confidence score weights
 CONFIDENCE_WEIGHTS = {
     'prediction_margin': 0.3,  # Weight for prediction probability margin

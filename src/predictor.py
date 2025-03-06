@@ -3,13 +3,13 @@ Main predictor class that orchestrates the NBA prediction workflow.
 """
 import pandas as pd
 import numpy as np
-from typing import List, Dict, Tuple, Optional, Union
+from typing import List, Dict, Tuple, Optional, Union, Set
 
 from src.data.data_loader import NBADataLoader
 from src.features.feature_processor import NBAFeatureProcessor
 from src.models.ensemble_model import NBAEnsembleModel
 from src.models.deep_model import DeepModelTrainer
-from src.utils.constants import DEFAULT_LOOKBACK_WINDOWS
+from src.utils.constants import DEFAULT_LOOKBACK_WINDOWS, FEATURE_REGISTRY
 
 
 class EnhancedNBAPredictor:
@@ -53,9 +53,12 @@ class EnhancedNBAPredictor:
         print("Preparing features...")
         self.features, self.targets = self.feature_processor.prepare_features(self.stats_df)
         
-        # Add game date back to features for time-based splits
-        self.features['GAME_DATE'] = self.stats_df['GAME_DATE']
-        self.features['TARGET'] = self.targets
+        # Add game date and target together to avoid fragmentation
+        additional_cols = {
+            'GAME_DATE': self.stats_df['GAME_DATE'],
+            'TARGET': self.targets
+        }
+        self.features = pd.concat([self.features, pd.DataFrame(additional_cols, index=self.features.index)], axis=1)
         
     def train_models(self) -> None:
         """Train both ensemble and deep learning models."""
@@ -120,7 +123,7 @@ class EnhancedNBAPredictor:
                                 away_team_id: int,
                                 game_date: Optional[str] = None) -> pd.DataFrame:
         """
-        Prepare features for a specific game prediction with improved feature compatibility.
+        Prepare features for a specific game prediction using the standardized feature pipeline.
         
         Args:
             home_team_id: NBA API team ID for home team
@@ -138,6 +141,8 @@ class EnhancedNBAPredictor:
             game_date = self.stats_df['GAME_DATE'].max()
         else:
             game_date = pd.to_datetime(game_date)
+            
+        print(f"Preparing prediction for {home_team_id} (home) vs {away_team_id} (away) on {game_date}")
             
         # Find the most recent entry for both teams
         home_stats = self.stats_df[
@@ -184,23 +189,71 @@ class EnhancedNBAPredictor:
         
         if not h2h_stats.empty:
             h2h_recent = h2h_stats.iloc[0]
-            for col in ['H2H_GAMES', 'H2H_WIN_PCT', 'DAYS_SINCE_H2H', 'LAST_GAME_HOME']:
+            for col in ['H2H_GAMES', 'H2H_WIN_PCT', 'DAYS_SINCE_H2H', 'LAST_GAME_HOME', 
+                      'H2H_AVG_MARGIN', 'H2H_STREAK', 'H2H_HOME_ADVANTAGE', 'H2H_MOMENTUM']:
                 if col in h2h_recent:
                     new_game[col] = h2h_recent[col]
         else:
             # Default values if no head-to-head history
-            new_game['H2H_GAMES'] = 0
-            new_game['H2H_WIN_PCT'] = 0.5
-            new_game['DAYS_SINCE_H2H'] = 365
-            new_game['LAST_GAME_HOME'] = 0
+            h2h_defaults = {
+                'H2H_GAMES': 0,
+                'H2H_WIN_PCT': 0.5,
+                'DAYS_SINCE_H2H': 365,
+                'LAST_GAME_HOME': 0,
+                'H2H_AVG_MARGIN': 0,
+                'H2H_STREAK': 0,
+                'H2H_HOME_ADVANTAGE': 0.5,
+                'H2H_MOMENTUM': 0.5
+            }
+            for col, val in h2h_defaults.items():
+                new_game[col] = val
             
         # Process features for this game
         game_df = pd.DataFrame([new_game])
         
-        # Get features from the feature processor
-        print("Generating prediction features...")
+        # Collect required features from all sources
+        required_features = self._get_required_features()
         
-        # Get required features from the training models
+        print(f"Identified {len(required_features)} required features for prediction")
+        
+        # Initialize feature transformer with required features
+        self.feature_processor.feature_transformer.register_features(list(required_features))
+        
+        # Generate prediction features using the standardized pipeline
+        print("Generating prediction features using standardized pipeline...")
+        prediction_features = self.feature_processor.prepare_enhanced_features(game_df)
+        
+        # Final validation to ensure all required features are present
+        missing_features = []
+        missing_feature_values = {}
+        
+        for feature in required_features:
+            if feature not in prediction_features.columns and feature not in ['GAME_DATE', 'TARGET']:
+                missing_features.append(feature)
+                # Add with default value (0 or 0.5 for probabilities)
+                if any(prob_term in feature for prob_term in ['WIN_PCT', 'PROBABILITY', 'H2H_']):
+                    missing_feature_values[feature] = 0.5
+                else:
+                    missing_feature_values[feature] = 0
+        
+        # Add all missing features at once to avoid fragmentation
+        if missing_feature_values:
+            # Create a DataFrame with missing features and concatenate
+            missing_df = pd.DataFrame(missing_feature_values, index=prediction_features.index)
+            prediction_features = pd.concat([prediction_features, missing_df], axis=1)
+        
+        if missing_features:
+            print(f"Added {len(missing_features)} missing features with default values: {missing_features[:5]}...")
+        
+        return prediction_features
+        
+    def _get_required_features(self) -> Set[str]:
+        """
+        Get a comprehensive set of all required features from all components.
+        
+        Returns:
+            Set of required feature names
+        """
         required_features = set()
         
         # From ensemble model
@@ -211,138 +264,36 @@ class EnhancedNBAPredictor:
         if hasattr(self.deep_model_trainer, 'training_features'):
             required_features.update(self.deep_model_trainer.training_features)
             
+        # From feature registry (important derived features)
+        for base_feature, info in FEATURE_REGISTRY.items():
+            if info['type'] in ['derived', 'interaction']:
+                # Add all window variants if applicable
+                if info['windows']:
+                    for window in info['windows']:
+                        required_features.add(f"{base_feature}_{window}D")
+                else:
+                    required_features.add(base_feature)
+                    
+                # Also add dependencies
+                if 'dependencies' in info:
+                    for dep in info['dependencies']:
+                        if info['windows']:
+                            for window in info['windows']:
+                                required_features.add(f"{dep}_{window}D")
+                        else:
+                            required_features.add(dep)
+            
         # If we have a record of the training features
         if self.features is not None:
             feature_cols = [col for col in self.features.columns if col not in ['GAME_DATE', 'TARGET']]
             required_features.update(feature_cols)
-        
-        # Create a new features DataFrame with the game date
-        prediction_features = pd.DataFrame(index=[0])
-        prediction_features['GAME_DATE'] = game_date
-        
-        # Generate base features using the feature processor
-        base_features = self.feature_processor.prepare_enhanced_features(game_df)
-        
-        # Copy all features from base_features
-        for col in base_features.columns:
-            if col != 'TARGET':  # Skip target column
-                prediction_features[col] = base_features[col].values
-        
-        # Add specifically identified missing features
-        # PACE differentials
-        for window in self.lookback_windows:
-            window_str = f'_{window}D'
-            pace_diff_col = f'PACE_DIFF{window_str}'
             
-            # If PACE_DIFF is missing but required
-            if pace_diff_col in required_features and pace_diff_col not in prediction_features.columns:
-                home_pace_col = f'PACE_mean_HOME{window_str}'
-                away_pace_col = f'PACE_mean_AWAY{window_str}'
+        # Remove non-feature columns
+        for col in ['GAME_DATE', 'TARGET', 'TEAM_ID_HOME', 'TEAM_ID_AWAY']:
+            if col in required_features:
+                required_features.remove(col)
                 
-                # If we have the component values
-                if home_pace_col in prediction_features.columns and away_pace_col in prediction_features.columns:
-                    prediction_features[pace_diff_col] = (
-                        prediction_features[home_pace_col] - prediction_features[away_pace_col]
-                    )
-                else:
-                    # Otherwise use a default
-                    prediction_features[pace_diff_col] = 0
-        
-        # H2H_RECENCY_WEIGHT
-        if 'H2H_RECENCY_WEIGHT' in required_features and 'H2H_RECENCY_WEIGHT' not in prediction_features.columns:
-            if 'H2H_WIN_PCT' in prediction_features.columns and 'DAYS_SINCE_H2H' in prediction_features.columns:
-                import numpy as np
-                # Safely calculate the recency weight
-                days = max(1, prediction_features['DAYS_SINCE_H2H'].iloc[0])
-                prediction_features['H2H_RECENCY_WEIGHT'] = (
-                    prediction_features['H2H_WIN_PCT'].iloc[0] / np.log1p(days)
-                )
-            else:
-                prediction_features['H2H_RECENCY_WEIGHT'] = 0.5
-                
-        # Add all consistency features
-        for window in self.lookback_windows:
-            window_str = f'_{window}D'
-            for location in ['HOME', 'AWAY']:
-                # For each consistency feature
-                consistency_feat = f'{location}_CONSISTENCY{window_str}'
-                if consistency_feat in required_features and consistency_feat not in prediction_features.columns:
-                    # Try to derive from PTS_mean and PTS_std if available
-                    pts_mean_col = f'PTS_mean_{location}{window_str}'
-                    pts_std_col = f'PTS_std_{location}{window_str}'
-                    
-                    if pts_mean_col in prediction_features.columns and pts_std_col in prediction_features.columns:
-                        # Only calculate if mean is non-zero
-                        if prediction_features[pts_mean_col].iloc[0] > 0:
-                            prediction_features[consistency_feat] = (
-                                prediction_features[pts_std_col].iloc[0] / 
-                                prediction_features[pts_mean_col].iloc[0]
-                            )
-                        else:
-                            prediction_features[consistency_feat] = 0.5
-                    else:
-                        prediction_features[consistency_feat] = 0.5  # Middle value for default
-        
-        # Add all FATIGUE_DIFF features
-        for window in self.lookback_windows:
-            window_str = f'_{window}D'
-            fatigue_diff_col = f'FATIGUE_DIFF{window_str}'
-            
-            if fatigue_diff_col in required_features and fatigue_diff_col not in prediction_features.columns:
-                home_fatigue_col = f'FATIGUE_HOME{window_str}'
-                away_fatigue_col = f'FATIGUE_AWAY{window_str}'
-                
-                if home_fatigue_col in prediction_features.columns and away_fatigue_col in prediction_features.columns:
-                    prediction_features[fatigue_diff_col] = (
-                        prediction_features[home_fatigue_col] - prediction_features[away_fatigue_col]
-                    )
-                else:
-                    prediction_features[fatigue_diff_col] = 0
-        
-        # Add all WIN_PCT_DIFF features
-        for window in self.lookback_windows:
-            window_str = f'_{window}D'
-            win_pct_diff_col = f'WIN_PCT_DIFF{window_str}'
-            
-            if win_pct_diff_col in required_features and win_pct_diff_col not in prediction_features.columns:
-                home_win_pct_col = f'WIN_PCT_HOME{window_str}'
-                away_win_pct_col = f'WIN_PCT_AWAY{window_str}'
-                
-                if home_win_pct_col in prediction_features.columns and away_win_pct_col in prediction_features.columns:
-                    prediction_features[win_pct_diff_col] = (
-                        prediction_features[home_win_pct_col] - prediction_features[away_win_pct_col]
-                    )
-                else:
-                    prediction_features[win_pct_diff_col] = 0
-                    
-        # Add all Rating (RTG) differential features
-        for rtg_type in ['OFF_RTG', 'DEF_RTG', 'NET_RTG']:
-            for window in self.lookback_windows:
-                window_str = f'_{window}D'
-                rtg_diff_col = f'{rtg_type}_DIFF{window_str}'
-                
-                if rtg_diff_col in required_features and rtg_diff_col not in prediction_features.columns:
-                    home_rtg_col = f'{rtg_type}_mean_HOME{window_str}'
-                    away_rtg_col = f'{rtg_type}_mean_AWAY{window_str}'
-                    
-                    if home_rtg_col in prediction_features.columns and away_rtg_col in prediction_features.columns:
-                        prediction_features[rtg_diff_col] = (
-                            prediction_features[home_rtg_col] - prediction_features[away_rtg_col]
-                        )
-                    else:
-                        prediction_features[rtg_diff_col] = 0
-        
-        # Add any remaining missing required features with default values
-        for col in required_features:
-            if col not in prediction_features.columns and col not in ['GAME_DATE', 'TARGET']:
-                prediction_features[col] = 0
-        
-        # Add head-to-head features if they're required but missing
-        for h2h_feat in ['H2H_GAMES', 'H2H_WIN_PCT', 'DAYS_SINCE_H2H', 'H2H_MOMENTUM', 'H2H_HOME_ADVANTAGE']:
-            if h2h_feat in required_features and h2h_feat not in prediction_features.columns:
-                prediction_features[h2h_feat] = 0 if h2h_feat != 'H2H_WIN_PCT' else 0.5
-        
-        return prediction_features
+        return required_features
     
     def predict_game(self, 
                      home_team_id: int, 

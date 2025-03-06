@@ -9,7 +9,9 @@ import torch.optim as optim
 from sklearn.model_selection import TimeSeriesSplit
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import accuracy_score, brier_score_loss, roc_auc_score
-from typing import List, Tuple
+from typing import List, Tuple, Set, Dict
+
+from src.utils.constants import FEATURE_REGISTRY
 
 
 class DeepNBAPredictor(nn.Module):
@@ -193,7 +195,7 @@ class DeepModelTrainer:
         
     def predict(self, X: pd.DataFrame) -> np.ndarray:
         """
-        Make predictions using the trained ensemble of deep models.
+        Make predictions using the trained ensemble of deep models with enhanced feature handling.
         
         Args:
             X: DataFrame containing features
@@ -219,6 +221,10 @@ class DeepModelTrainer:
         all_preds = []
         
         for fold_idx, (model, scaler) in enumerate(zip(self.models, self.scalers)):
+            # Only print for first fold to reduce verbosity
+            if fold_idx == 0:
+                print("Processing deep model predictions...")
+                
             try:
                 # Determine expected columns for this fold's scaler
                 expected_cols = None
@@ -228,19 +234,80 @@ class DeepModelTrainer:
                     expected_cols = self.training_features
                 
                 if expected_cols is not None:
-                    # Create a temporary DataFrame with the expected columns in correct order
-                    X_aligned = pd.DataFrame(index=X.index)
+                    # Create a dictionary to collect all columns
+                    X_aligned_dict = {}
+                    
                     for col in expected_cols:
+                        # If feature exists in input, use it
                         if col in X.columns:
-                            X_aligned[col] = X[col]
+                            X_aligned_dict[col] = X[col].values
                         else:
-                            X_aligned[col] = 0
+                            # Check if we can derive this feature from others
+                            feature_derived = False
+                            
+                            # Try to get base feature name and window
+                            base_feature = col
+                            window = None
+                            if '_D' in col:
+                                parts = col.split('_')
+                                for i, part in enumerate(parts):
+                                    if part.endswith('D') and part[:-1].isdigit():
+                                        base_feature = '_'.join(parts[:i])
+                                        window = part[:-1]
+                                        break
+                            
+                            # Check if this is a registered feature type we can derive
+                            if base_feature in FEATURE_REGISTRY:
+                                feature_info = FEATURE_REGISTRY[base_feature]
+                                
+                                # Only derive if it's a derivable feature and dependencies are available
+                                if feature_info['type'] in ['derived', 'interaction'] and 'dependencies' in feature_info:
+                                    # Get dependency column names with appropriate windows
+                                    dependencies = []
+                                    for dep in feature_info['dependencies']:
+                                        if window and self._should_apply_window(dep):
+                                            dependencies.append(f"{dep}_{window}D")
+                                        else:
+                                            dependencies.append(dep)
+                                    
+                                    # Check if all dependencies are available
+                                    if all(dep in X.columns for dep in dependencies):
+                                        # Derive the feature based on its type
+                                        if base_feature in ['WIN_PCT_DIFF', 'OFF_RTG_DIFF', 'DEF_RTG_DIFF', 
+                                                          'NET_RTG_DIFF', 'PACE_DIFF', 'FATIGUE_DIFF']:
+                                            # Simple difference features
+                                            X_aligned_dict[col] = X[dependencies[0]] - X[dependencies[1]]
+                                            feature_derived = True
+                                        elif base_feature in ['HOME_CONSISTENCY', 'AWAY_CONSISTENCY']:
+                                            # Consistency features (std/mean)
+                                            if X[dependencies[1]].iloc[0] > 0:  # Avoid division by zero
+                                                X_aligned_dict[col] = X[dependencies[0]] / X[dependencies[1]]
+                                            else:
+                                                X_aligned_dict[col] = 0.5  # Default if mean is zero
+                                            feature_derived = True
+                                        elif base_feature == 'H2H_RECENCY_WEIGHT':
+                                            # H2H recency weight
+                                            days = max(1, X[dependencies[1]].iloc[0])
+                                            X_aligned_dict[col] = X[dependencies[0]].iloc[0] / np.log1p(days)
+                                            feature_derived = True
+                            
+                            # If we couldn't derive it, use a default value
+                            if not feature_derived:
+                                # Use 0.5 for probability features, 0 for others
+                                if any(prob_term in col for prob_term in ['WIN_PCT', 'PROBABILITY', 'H2H_']):
+                                    X_aligned_dict[col] = 0.5
+                                else:
+                                    X_aligned_dict[col] = 0
+                    
+                    # Create DataFrame all at once to avoid fragmentation
+                    X_aligned = pd.DataFrame(X_aligned_dict, index=X.index)
                     
                     # Scale features
                     try:
                         X_scaled = scaler.transform(X_aligned)
                     except Exception as e:
-                        print(f"Warning: Scaling error in fold {fold_idx+1}: {e}")
+                        if fold_idx == 0:  # Only print for first fold
+                            print(f"Warning: Scaling error in deep model: {e}")
                         # Fall back to simple normalization
                         X_scaled = (X_aligned - X_aligned.mean()) / X_aligned.std().replace(0, 1)
                         X_scaled = X_scaled.fillna(0).values
@@ -249,7 +316,8 @@ class DeepModelTrainer:
                     try:
                         X_scaled = scaler.transform(X)
                     except Exception as e:
-                        print(f"Warning: Direct scaling error in fold {fold_idx+1}: {e}")
+                        if fold_idx == 0:  # Only print for first fold
+                            print(f"Warning: Direct scaling error in deep model: {e}")
                         # Just standardize the data as a fallback
                         X_scaled = (X - X.mean()) / X.std().replace(0, 1)
                         X_scaled = X_scaled.fillna(0).values
@@ -264,7 +332,8 @@ class DeepModelTrainer:
                     probs = torch.softmax(outputs, dim=1)[:, 1].cpu().numpy()
                     all_preds.append(probs)
             except Exception as e:
-                print(f"Error in deep model prediction for fold {fold_idx+1}: {e}")
+                if fold_idx == 0:  # Only print for first fold
+                    print(f"Error in deep model prediction: {e}")
                 # Add default predictions in case of error
                 all_preds.append(np.full(len(X), 0.5))
                 
@@ -274,6 +343,24 @@ class DeepModelTrainer:
         else:
             # Default prediction if no models could be used
             ensemble_preds = np.full(len(X), 0.5)
-            print("Warning: Using default predictions (0.5) as all models failed")
+            print("Warning: Using default predictions (0.5) as all deep models failed")
         
         return ensemble_preds
+        
+    def _should_apply_window(self, column_name: str) -> bool:
+        """
+        Determine if a window should be applied to a column name.
+        
+        Args:
+            column_name: Column name to check
+            
+        Returns:
+            True if window should be applied
+        """
+        # Don't apply windows to columns that already have them
+        if '_D' in column_name:
+            return False
+            
+        # Don't apply windows to specific feature types
+        no_window_prefixes = ['REST_DAYS_', 'H2H_', 'DAYS_SINCE_', 'LAST_GAME_']
+        return not any(column_name.startswith(prefix) for prefix in no_window_prefixes)

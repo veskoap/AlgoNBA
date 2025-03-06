@@ -9,7 +9,9 @@ from sklearn.model_selection import TimeSeriesSplit
 from sklearn.preprocessing import StandardScaler
 from sklearn.feature_selection import SelectFromModel
 from sklearn.metrics import accuracy_score, brier_score_loss, roc_auc_score
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Set
+
+from src.utils.constants import FEATURE_REGISTRY
 
 
 class NBAEnsembleModel:
@@ -219,7 +221,7 @@ class NBAEnsembleModel:
             
     def predict(self, X: pd.DataFrame) -> np.ndarray:
         """
-        Make predictions using the trained ensemble of models.
+        Make predictions using the trained ensemble of models with enhanced feature handling.
         
         Args:
             X: DataFrame containing features
@@ -236,7 +238,7 @@ class NBAEnsembleModel:
         # Drop non-feature columns
         X = X.drop(['TARGET', 'GAME_DATE'], axis=1, errors='ignore')
         
-        # Ensure X has all training features in the correct order
+        # Ensure we have valid training features
         if not hasattr(self, 'training_features') or not self.training_features:
             # If training_features wasn't saved, try to infer from the first fold's scaler
             if self.models and self.models[0] and self.models[0][1]:
@@ -250,18 +252,67 @@ class NBAEnsembleModel:
         all_fold_preds = []
         
         for fold_idx, (window_models, scaler, stable_features) in enumerate(self.models):
-            print(f"Processing fold {fold_idx+1} prediction...")
+            # Only print for the first fold to reduce verbosity
+            if fold_idx == 0:
+                print(f"Processing ensemble model predictions...")
             
             try:
-                # Create a new DataFrame with the exact features needed
-                X_aligned = pd.DataFrame(index=X.index)
+                # Create a dictionary to collect all features
+                X_aligned_dict = {}
                 
                 # Add each expected feature, with a default of 0 if missing
                 for feature in stable_features:
+                    # If feature exists in input, use it
                     if feature in X.columns:
-                        X_aligned[feature] = X[feature].values
+                        X_aligned_dict[feature] = X[feature].values
                     else:
-                        X_aligned[feature] = np.zeros(len(X))
+                        # Check if we can derive this feature from others (for certain feature types)
+                        feature_derived = False
+                        
+                        # Try to get the base feature name without window suffix
+                        base_feature = feature
+                        window = None
+                        if '_D' in feature:
+                            parts = feature.split('_')
+                            for i, part in enumerate(parts):
+                                if part.endswith('D') and part[:-1].isdigit():
+                                    base_feature = '_'.join(parts[:i])
+                                    window = part[:-1]
+                                    break
+                        
+                        # Check if this is a registered feature type we can derive
+                        if base_feature in FEATURE_REGISTRY:
+                            feature_info = FEATURE_REGISTRY[base_feature]
+                            
+                            # Only try to derive if it's a derived feature and we have all dependencies
+                            if feature_info['type'] in ['derived', 'interaction'] and 'dependencies' in feature_info:
+                                # Get dependency column names, applying window if needed
+                                dependencies = []
+                                for dep in feature_info['dependencies']:
+                                    if window and self._should_apply_window(dep):
+                                        dependencies.append(f"{dep}_{window}D")
+                                    else:
+                                        dependencies.append(dep)
+                                
+                                # Check if all dependencies are available
+                                if all(dep in X.columns for dep in dependencies):
+                                    # Derive the feature based on its type
+                                    if base_feature == 'WIN_PCT_DIFF':
+                                        X_aligned_dict[feature] = X[dependencies[0]] - X[dependencies[1]]
+                                        feature_derived = True
+                                    elif base_feature in ['OFF_RTG_DIFF', 'DEF_RTG_DIFF', 'NET_RTG_DIFF', 'PACE_DIFF']:
+                                        X_aligned_dict[feature] = X[dependencies[0]] - X[dependencies[1]]
+                                        feature_derived = True
+                                    # Add other derivation rules as needed...
+                                
+                                # More derivation cases can be added here
+                        
+                        # If we couldn't derive it, use a default value
+                        if not feature_derived:
+                            X_aligned_dict[feature] = np.zeros(len(X))
+                
+                # Create DataFrame all at once to avoid fragmentation
+                X_aligned = pd.DataFrame(X_aligned_dict, index=X.index)
                 
                 # Scale the aligned features
                 try:
@@ -301,7 +352,6 @@ class NBAEnsembleModel:
                             try:
                                 # Create prediction directly using booster
                                 import xgboost as xgb
-                                import numpy as np
                                 feature_subset = [stable_features[i] for i in feature_indices]
                                 
                                 # Ensure we're passing a proper numpy array to DMatrix
@@ -323,10 +373,12 @@ class NBAEnsembleModel:
                                         preds = model.predict(X_input_array)
                                         window_preds.append(preds)
                                 except Exception as e3:
-                                    print(f"Warning: XGBoost prediction error: {e3}")
+                                    if fold_idx == 0:  # Only print for first fold
+                                        print(f"Warning: XGBoost prediction error: {e3}")
                                     window_preds.append(np.full(len(X), 0.5))
                             except Exception as e2:
-                                print(f"Warning: Model prediction error: Feature shape mismatch, expected: {len(features)}, got {len(feature_indices)}, {e2}")
+                                if fold_idx == 0:  # Only print for first fold
+                                    print(f"Warning: Model prediction error: {e2}")
                                 # Last resort default prediction
                                 window_preds.append(np.full(len(X), 0.5))
                 
@@ -339,7 +391,9 @@ class NBAEnsembleModel:
                     all_fold_preds.append(np.full(len(X), 0.5))
             
             except Exception as e:
-                print(f"Warning: Error in fold {fold_idx+1} prediction: {e}")
+                # Only print for first fold to reduce verbosity
+                if fold_idx == 0:
+                    print(f"Warning: Error in ensemble model prediction: {e}")
                 # Add a backup default prediction
                 all_fold_preds.append(np.full(len(X), 0.5))
         
@@ -352,6 +406,24 @@ class NBAEnsembleModel:
             print("Warning: Using default predictions (0.5) as no models could make valid predictions")
         
         return ensemble_preds
+        
+    def _should_apply_window(self, column_name: str) -> bool:
+        """
+        Determine if a window should be applied to a column name.
+        
+        Args:
+            column_name: Column name to check
+            
+        Returns:
+            True if window should be applied
+        """
+        # Don't apply windows to columns that already have them
+        if '_D' in column_name:
+            return False
+            
+        # Don't apply windows to specific feature types
+        no_window_prefixes = ['REST_DAYS_', 'H2H_', 'DAYS_SINCE_', 'LAST_GAME_']
+        return not any(column_name.startswith(prefix) for prefix in no_window_prefixes)
     
     def calculate_confidence_score(self, predictions: np.ndarray, features: pd.DataFrame) -> np.ndarray:
         """
