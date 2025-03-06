@@ -26,8 +26,14 @@ python main.py --seasons 2022-23 2023-24
 # Run in quick mode for faster testing (development only)
 python main.py --quick
 
+# Save trained models to disk
+python main.py --save-models
+
+# Load previously saved models
+python main.py --load-models saved_models/nba_model_20230401_120000
+
 # Combine options
-python main.py --quick --standard --seasons 2022-23
+python main.py --quick --standard --seasons 2022-23 --save-models
 ```
 
 ### Quick Mode Features

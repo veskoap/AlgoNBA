@@ -7,6 +7,7 @@ allowing users to train models and generate predictions with various options:
 - Enhanced vs standard models: Control accuracy vs complexity tradeoff
 - Season selection: Choose which NBA seasons to use for training
 - Quick mode: Faster execution for testing and development
+- Save/load models: Save trained models to disk and load them for later use
 
 Example usage:
     # Train with enhanced models (default)
@@ -20,6 +21,12 @@ Example usage:
     
     # Run in quick mode for faster testing
     python main.py --quick
+    
+    # Save trained models to disk
+    python main.py --save-models
+    
+    # Load previously saved models
+    python main.py --load-models saved_models/nba_model_20230401_120000
 """
 import sys
 import pandas as pd
@@ -45,29 +52,47 @@ def main():
                            'Uses fewer folds, simpler architectures, and fewer training '
                            'epochs. Useful for development and testing, not for '
                            'production-quality predictions.')
+    parser.add_argument('--save-models', action='store_true',
+                      help='Save trained models to disk for later use. Models will be saved '
+                           'in the "saved_models" directory with a timestamp.')
+    parser.add_argument('--load-models', metavar='MODEL_DIR', type=str,
+                      help='Load previously saved models from specified directory instead of '
+                           'training new ones. Example: --load-models saved_models/nba_model_20230401_120000')
     args = parser.parse_args()
     
     # Use enhanced models by default unless --standard flag is provided
     use_enhanced = not args.standard
     model_type = "enhanced" if use_enhanced else "standard"
     
-    print(f"Starting NBA prediction system with {model_type} models...")
-    
-    # Initialize the predictor with specified settings
-    predictor = EnhancedNBAPredictor(
-        seasons=args.seasons,
-        use_enhanced_models=use_enhanced,
-        quick_mode=args.quick
-    )
+    # Check if we're loading pre-trained models
+    if args.load_models:
+        print(f"Loading pre-trained models from {args.load_models}...")
+        predictor = EnhancedNBAPredictor.load_models(args.load_models)
+        print("Models loaded successfully!")
+    else:
+        # Initialize a new predictor with specified settings
+        print(f"Starting NBA prediction system with {model_type} models...")
+        predictor = EnhancedNBAPredictor(
+            seasons=args.seasons,
+            use_enhanced_models=use_enhanced,
+            quick_mode=args.quick
+        )
     
     try:
-        # Fetch and process data
-        print("Fetching and processing NBA game data...")
-        predictor.fetch_and_process_data()
-        
-        # Train models
-        print("Training prediction models...")
-        predictor.train_models()
+        # If not loading pre-trained models, fetch data and train
+        if not args.load_models:
+            # Fetch and process data
+            print("Fetching and processing NBA game data...")
+            predictor.fetch_and_process_data()
+            
+            # Train models
+            print("Training prediction models...")
+            predictor.train_models()
+            
+            # Save models if requested
+            if args.save_models:
+                save_dir = predictor.save_models()
+                print(f"Models saved to {save_dir}")
         
         # Print top features
         top_features = predictor.get_feature_importances(10)
@@ -103,7 +128,7 @@ def main():
         print("\nNBA prediction system ready!")
         
     except Exception as e:
-        print(f"Error during model training: {e}")
+        print(f"Error: {e}")
         sys.exit(1)
 
 

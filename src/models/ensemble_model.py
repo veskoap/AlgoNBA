@@ -1,6 +1,9 @@
 """
 Ensemble model for NBA prediction.
 """
+import os
+import pickle
+import joblib
 import numpy as np
 import pandas as pd
 import xgboost as xgb
@@ -9,7 +12,7 @@ from sklearn.model_selection import TimeSeriesSplit
 from sklearn.preprocessing import StandardScaler
 from sklearn.feature_selection import SelectFromModel
 from sklearn.metrics import accuracy_score, brier_score_loss, roc_auc_score
-from typing import Dict, List, Tuple, Set
+from typing import Dict, List, Tuple, Set, Any, Optional
 
 from src.utils.constants import FEATURE_REGISTRY
 from src.utils.scaling.enhanced_scaler import EnhancedScaler
@@ -529,3 +532,124 @@ class NBAEnsembleModel:
             
         sorted_features = sorted(self.feature_importances.items(), key=lambda x: x[1], reverse=True)
         return dict(sorted_features[:n])
+        
+    def save_model(self, save_dir: str) -> None:
+        """
+        Save the ensemble model to disk.
+        
+        Args:
+            save_dir: Directory to save the model in
+        """
+        # Create save directory if it doesn't exist
+        os.makedirs(save_dir, exist_ok=True)
+        
+        # Save XGBoost models using their native format
+        for fold_idx, (window_models, scaler, stable_features) in enumerate(self.models):
+            # Create fold-specific directory
+            fold_dir = os.path.join(save_dir, f"fold_{fold_idx}")
+            os.makedirs(fold_dir, exist_ok=True)
+            
+            # Save stable features list
+            with open(os.path.join(fold_dir, "stable_features.pkl"), "wb") as f:
+                pickle.dump(stable_features, f)
+            
+            # Save scaler
+            joblib.dump(scaler, os.path.join(fold_dir, "scaler.joblib"))
+            
+            # Save each window model
+            for window_idx, (window_name, model, features) in enumerate(window_models):
+                # Create window-specific directory
+                window_dir = os.path.join(fold_dir, f"window_{window_idx}_{window_name}")
+                os.makedirs(window_dir, exist_ok=True)
+                
+                # Save model using native XGBoost format
+                model.save_model(os.path.join(window_dir, "model.json"))
+                
+                # Save feature list
+                with open(os.path.join(window_dir, "features.pkl"), "wb") as f:
+                    pickle.dump(features, f)
+        
+        # Save feature importances and training features
+        model_metadata = {
+            "feature_importances": self.feature_importances,
+            "training_features": self.training_features,
+            "feature_importance_summary": self.feature_importance_summary,
+            "selected_features": self.selected_features
+        }
+        
+        with open(os.path.join(save_dir, "metadata.pkl"), "wb") as f:
+            pickle.dump(model_metadata, f)
+    
+    @classmethod
+    def load_model(cls, model_dir: str) -> 'NBAEnsembleModel':
+        """
+        Load an ensemble model from disk.
+        
+        Args:
+            model_dir: Directory containing the saved model
+            
+        Returns:
+            NBAEnsembleModel: Loaded model
+        """
+        model = cls()
+        
+        # Load metadata
+        with open(os.path.join(model_dir, "metadata.pkl"), "rb") as f:
+            metadata = pickle.load(f)
+            model.feature_importances = metadata["feature_importances"]
+            model.training_features = metadata["training_features"]
+            model.feature_importance_summary = metadata.get("feature_importance_summary", {})
+            model.selected_features = metadata.get("selected_features", {})
+        
+        # Load models for each fold
+        model.models = []
+        fold_idx = 0
+        
+        while True:
+            fold_dir = os.path.join(model_dir, f"fold_{fold_idx}")
+            if not os.path.exists(fold_dir):
+                break
+                
+            # Load stable features
+            with open(os.path.join(fold_dir, "stable_features.pkl"), "rb") as f:
+                stable_features = pickle.load(f)
+            
+            # Load scaler
+            scaler = joblib.load(os.path.join(fold_dir, "scaler.joblib"))
+            
+            # Load all window models for this fold
+            window_models = []
+            window_idx = 0
+            
+            while True:
+                # Check if any window directory exists with this index
+                window_dirs = [d for d in os.listdir(fold_dir) 
+                               if d.startswith(f"window_{window_idx}_") and 
+                               os.path.isdir(os.path.join(fold_dir, d))]
+                
+                if not window_dirs:
+                    break
+                    
+                # Get the first window directory for this index
+                window_dir = os.path.join(fold_dir, window_dirs[0])
+                window_name = window_dirs[0].split("_")[2]  # Extract window name
+                
+                # Load features
+                with open(os.path.join(window_dir, "features.pkl"), "rb") as f:
+                    features = pickle.load(f)
+                
+                # Create and load XGBoost model
+                model_path = os.path.join(window_dir, "model.json")
+                xgb_model = xgb.XGBClassifier()
+                xgb_model.load_model(model_path)
+                
+                # Add to window models
+                window_models.append((window_name, xgb_model, features))
+                window_idx += 1
+            
+            # Add to fold models
+            model.models.append((window_models, scaler, stable_features))
+            fold_idx += 1
+        
+        print(f"Loaded ensemble model with {fold_idx} folds")
+        return model

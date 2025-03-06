@@ -1,9 +1,13 @@
 """
 Main predictor class that orchestrates the NBA prediction workflow.
 """
+import os
+import pickle
+import joblib
 import pandas as pd
 import numpy as np
 from typing import List, Dict, Tuple, Optional, Union, Set
+import datetime
 
 from src.data.data_loader import NBADataLoader
 from src.features.feature_processor import NBAFeatureProcessor
@@ -445,3 +449,125 @@ class EnhancedNBAPredictor:
         }
         
         return result
+        
+    def save_models(self, directory: str = 'saved_models') -> str:
+        """
+        Save all trained models to disk.
+        
+        Args:
+            directory: Directory to save models in
+            
+        Returns:
+            str: Path to the saved model directory
+        """
+        # Create save directory if it doesn't exist
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        save_dir = os.path.join(directory, f"nba_model_{timestamp}")
+        os.makedirs(save_dir, exist_ok=True)
+        
+        print(f"Saving models to {save_dir}...")
+        
+        # Save model configuration
+        config = {
+            'seasons': self.seasons,
+            'lookback_windows': self.lookback_windows,
+            'use_enhanced_models': self.use_enhanced_models,
+            'quick_mode': self.quick_mode,
+            'timestamp': timestamp
+        }
+        
+        with open(os.path.join(save_dir, 'config.pkl'), 'wb') as f:
+            pickle.dump(config, f)
+        
+        # Save the feature processor state
+        with open(os.path.join(save_dir, 'feature_processor.pkl'), 'wb') as f:
+            pickle.dump(self.feature_processor, f)
+        
+        # Save the ensemble model
+        if self.ensemble_model:
+            self.ensemble_model.save_model(os.path.join(save_dir, 'ensemble_model'))
+        
+        # Save the deep model
+        if self.deep_model_trainer:
+            self.deep_model_trainer.save_model(os.path.join(save_dir, 'deep_model'))
+        
+        # Save the hybrid model if available
+        if self.hybrid_model:
+            self.hybrid_model.save_model(os.path.join(save_dir, 'hybrid_model'))
+        
+        # Save feature statistics
+        if self.features is not None:
+            with open(os.path.join(save_dir, 'feature_stats.pkl'), 'wb') as f:
+                # Save only the feature names and statistics, not the full data
+                feature_stats = {
+                    'feature_names': list(self.features.columns),
+                    'feature_means': self.features.mean().to_dict(),
+                    'feature_stds': self.features.std().to_dict(),
+                }
+                pickle.dump(feature_stats, f)
+        
+        print(f"Models successfully saved to {save_dir}")
+        
+        return save_dir
+    
+    @classmethod
+    def load_models(cls, model_dir: str) -> 'EnhancedNBAPredictor':
+        """
+        Load a saved model from disk.
+        
+        Args:
+            model_dir: Directory containing saved model files
+            
+        Returns:
+            EnhancedNBAPredictor: Loaded predictor instance
+        """
+        print(f"Loading models from {model_dir}...")
+        
+        # Load configuration
+        with open(os.path.join(model_dir, 'config.pkl'), 'rb') as f:
+            config = pickle.load(f)
+        
+        # Create a new instance with the same configuration
+        predictor = cls(
+            seasons=config['seasons'],
+            lookback_windows=config['lookback_windows'],
+            use_enhanced_models=config['use_enhanced_models'],
+            quick_mode=config['quick_mode']
+        )
+        
+        # Load feature processor
+        with open(os.path.join(model_dir, 'feature_processor.pkl'), 'rb') as f:
+            predictor.feature_processor = pickle.load(f)
+        
+        # Load models
+        # Ensemble model
+        ensemble_dir = os.path.join(model_dir, 'ensemble_model')
+        if os.path.exists(ensemble_dir):
+            if config['use_enhanced_models']:
+                predictor.ensemble_model = NBAEnhancedEnsembleModel.load_model(ensemble_dir)
+            else:
+                predictor.ensemble_model = NBAEnsembleModel.load_model(ensemble_dir)
+        
+        # Deep model
+        deep_dir = os.path.join(model_dir, 'deep_model')
+        if os.path.exists(deep_dir):
+            if config['use_enhanced_models']:
+                predictor.deep_model_trainer = EnhancedDeepModelTrainer.load_model(deep_dir)
+            else:
+                predictor.deep_model_trainer = DeepModelTrainer.load_model(deep_dir)
+        
+        # Hybrid model
+        hybrid_dir = os.path.join(model_dir, 'hybrid_model')
+        if os.path.exists(hybrid_dir):
+            predictor.hybrid_model = HybridModel.load_model(hybrid_dir)
+        
+        # Load feature statistics if available
+        stats_path = os.path.join(model_dir, 'feature_stats.pkl')
+        if os.path.exists(stats_path):
+            with open(stats_path, 'rb') as f:
+                feature_stats = pickle.load(f)
+                # Set as placeholder to enable prediction
+                predictor.features = pd.DataFrame(columns=feature_stats['feature_names'])
+        
+        print(f"Models successfully loaded from {model_dir}")
+        return predictor

@@ -85,6 +85,12 @@ python main.py --seasons 2021-22 2022-23
 
 # Use quick mode for faster testing with simplified models
 python main.py --quick
+
+# Save trained models to disk for later use
+python main.py --save-models
+
+# Load previously saved models (skips training)
+python main.py --load-models saved_models/nba_model_20230401_120000
 ```
 
 The `--quick` flag enables a faster testing mode that:
@@ -94,6 +100,37 @@ The `--quick` flag enables a faster testing mode that:
 - Performs less hyperparameter optimization
 
 This mode is useful for development and testing purposes, but for the highest accuracy, run without the quick flag.
+
+### Model Persistence
+
+You can save trained models to disk using the `--save-models` flag. Models will be saved to the `saved_models` directory with a timestamp, allowing you to load them later without retraining.
+
+When running on resource-constrained environments like Google Colab, it's a good practice to:
+1. Train models with the `--save-models` flag
+2. Save the models to Google Drive to preserve them between sessions
+3. Load the saved models with `--load-models` for making predictions
+
+Example workflow:
+```python
+# In Google Colab
+from google.colab import drive
+drive.mount('/content/drive')
+
+# Clone repository and install requirements
+!git clone https://github.com/yourusername/AlgoNBA.git
+%cd AlgoNBA
+!pip install -r requirements.txt
+
+# Train models and save them to Google Drive
+!python main.py --quick --save-models
+!mkdir -p /content/drive/MyDrive/AlgoNBA/models/
+!cp -r saved_models/* /content/drive/MyDrive/AlgoNBA/models/
+
+# In a later session, load models from Google Drive
+!mkdir -p saved_models
+!cp -r /content/drive/MyDrive/AlgoNBA/models/* saved_models/
+!python main.py --load-models saved_models/nba_model_20230401_120000
+```
 
 ## Example Code
 
@@ -187,11 +224,13 @@ The enhanced system includes additional features:
 - numpy
 - scikit-learn
 - xgboost
-- lightgbm (new)
+- lightgbm
 - pytorch
 - nba_api
 - geopy
 - pytz
+- joblib (for model serialization)
+- tqdm (for progress tracking)
 
 ## License
 

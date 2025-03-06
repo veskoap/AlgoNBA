@@ -1,6 +1,9 @@
 """
 Deep learning models for NBA prediction.
 """
+import os
+import pickle
+import joblib
 import numpy as np
 import pandas as pd
 import torch
@@ -9,7 +12,7 @@ import torch.optim as optim
 from sklearn.model_selection import TimeSeriesSplit
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import accuracy_score, brier_score_loss, roc_auc_score
-from typing import List, Tuple, Set, Dict
+from typing import List, Tuple, Set, Dict, Any, Optional
 
 from src.utils.constants import FEATURE_REGISTRY
 from src.utils.scaling.enhanced_scaler import EnhancedScaler
@@ -373,3 +376,101 @@ class DeepModelTrainer:
         # Don't apply windows to specific feature types
         no_window_prefixes = ['REST_DAYS_', 'H2H_', 'DAYS_SINCE_', 'LAST_GAME_']
         return not any(column_name.startswith(prefix) for prefix in no_window_prefixes)
+        
+    def save_model(self, save_dir: str) -> None:
+        """
+        Save the deep model to disk.
+        
+        Args:
+            save_dir: Directory to save the model in
+        """
+        # Create save directory if it doesn't exist
+        os.makedirs(save_dir, exist_ok=True)
+        
+        # Save metadata
+        metadata = {
+            'training_features': self.training_features,
+            'device': str(self.device)
+        }
+        with open(os.path.join(save_dir, 'metadata.pkl'), 'wb') as f:
+            pickle.dump(metadata, f)
+        
+        # Save each model and scaler
+        for fold_idx, (model, scaler) in enumerate(zip(self.models, self.scalers)):
+            # Create fold directory
+            fold_dir = os.path.join(save_dir, f'fold_{fold_idx}')
+            os.makedirs(fold_dir, exist_ok=True)
+            
+            # Save PyTorch model
+            torch.save(model.state_dict(), os.path.join(fold_dir, 'model.pt'))
+            
+            # Save model architecture info
+            with open(os.path.join(fold_dir, 'architecture.pkl'), 'wb') as f:
+                pickle.dump({
+                    'input_size': model.network[0].in_features,
+                    'hidden_layers': [
+                        model.network[0].out_features,  # First hidden layer size
+                        model.network[4].out_features,  # Second hidden layer size
+                        model.network[8].out_features,  # Third hidden layer size
+                        model.network[12].out_features  # Fourth hidden layer size
+                    ]
+                }, f)
+            
+            # Save scaler
+            joblib.dump(scaler, os.path.join(fold_dir, 'scaler.joblib'))
+    
+    @classmethod
+    def load_model(cls, model_dir: str) -> 'DeepModelTrainer':
+        """
+        Load a deep model from disk.
+        
+        Args:
+            model_dir: Directory containing the saved model
+            
+        Returns:
+            DeepModelTrainer: Loaded model trainer
+        """
+        # Create new instance
+        trainer = cls()
+        
+        # Load metadata
+        with open(os.path.join(model_dir, 'metadata.pkl'), 'rb') as f:
+            metadata = pickle.load(f)
+            trainer.training_features = metadata.get('training_features', [])
+            # Note: We use the current device rather than the saved one for flexibility
+            trainer.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        
+        # Load models and scalers
+        trainer.models = []
+        trainer.scalers = []
+        
+        fold_idx = 0
+        while True:
+            fold_dir = os.path.join(model_dir, f'fold_{fold_idx}')
+            if not os.path.exists(fold_dir):
+                break
+                
+            # Load architecture info
+            with open(os.path.join(fold_dir, 'architecture.pkl'), 'rb') as f:
+                architecture = pickle.load(f)
+                
+            # Create model with the same architecture
+            model = DeepNBAPredictor(architecture['input_size']).to(trainer.device)
+            
+            # Load weights
+            model.load_state_dict(torch.load(
+                os.path.join(fold_dir, 'model.pt'), 
+                map_location=trainer.device
+            ))
+            
+            # Load scaler
+            scaler = joblib.load(os.path.join(fold_dir, 'scaler.joblib'))
+            
+            # Add to trainer
+            trainer.models.append(model)
+            trainer.scalers.append(scaler)
+            
+            fold_idx += 1
+        
+        print(f"Loaded deep model with {fold_idx} folds")
+        return trainer
