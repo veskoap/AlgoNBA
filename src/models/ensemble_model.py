@@ -12,6 +12,7 @@ from sklearn.metrics import accuracy_score, brier_score_loss, roc_auc_score
 from typing import Dict, List, Tuple, Set
 
 from src.utils.constants import FEATURE_REGISTRY
+from src.utils.scaling.enhanced_scaler import EnhancedScaler
 
 
 class NBAEnsembleModel:
@@ -94,8 +95,8 @@ class NBAEnsembleModel:
             X_train, X_val = X.iloc[train_idx], X.iloc[val_idx]
             y_train, y_val = y.iloc[train_idx], y.iloc[val_idx]
 
-            # Scale features
-            scaler = StandardScaler()
+            # Scale features using enhanced scaler for robustness
+            scaler = EnhancedScaler()
             X_train_scaled = scaler.fit_transform(X_train)
             X_val_scaled = scaler.transform(X_val)
             
@@ -316,7 +317,12 @@ class NBAEnsembleModel:
                 
                 # Scale the aligned features
                 try:
-                    X_scaled = scaler.transform(X_aligned)
+                    if isinstance(scaler, EnhancedScaler):
+                        # Use enhanced scaler directly
+                        X_scaled = scaler.transform(X_aligned)
+                    else:
+                        # For backward compatibility with old models using StandardScaler
+                        X_scaled = scaler.transform(X_aligned)
                 except Exception as e:
                     # Create a more detailed error message with missing feature information
                     missing_features = []
@@ -329,9 +335,9 @@ class NBAEnsembleModel:
                     if missing_features:
                         print(f"Missing features: {missing_features[:5]}...")
                     
-                    # Fallback to standard normalization
-                    X_scaled = (X_aligned - X_aligned.mean()) / (X_aligned.std().replace(0, 1))
-                    X_scaled = X_scaled.fillna(0).values
+                    # Use enhanced scaler as fallback
+                    fallback_scaler = EnhancedScaler()
+                    X_scaled = fallback_scaler.fit_transform(X_aligned)
                 
                 # Get predictions from each window model
                 window_preds = []
