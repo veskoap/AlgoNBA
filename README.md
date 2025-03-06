@@ -4,13 +4,23 @@
 
 AlgoNBA is a sophisticated machine learning system designed to predict the outcomes of NBA basketball games. It leverages multiple data sources and advanced algorithms to provide accurate win probabilities with confidence scores.
 
+## New High-Accuracy Models
+
+The system now includes enhanced prediction models targeting **70%+ accuracy** and **0.8+ confidence scores**:
+
+- **Player Availability Analysis**: Incorporates player impact and availability for more nuanced predictions
+- **Enhanced Ensemble Models**: Combines XGBoost and LightGBM with model calibration for higher accuracy
+- **Advanced Deep Learning**: Implements residual networks and self-attention mechanisms
+- **Monte Carlo Dropout**: Provides uncertainty estimates for more reliable confidence scores
+- **Sophisticated Model Integration**: Uses dynamic weighting between models based on prediction strength
+
 ## Features
 
 - **Comprehensive Data Processing**: Fetches historical game data from NBA API with advanced statistics
-- **Advanced Feature Engineering**: Creates 100+ features including team performance metrics, head-to-head statistics, rest days, travel impact, and more
-- **Ensemble Machine Learning**: Combines gradient boosting (XGBoost) and deep neural networks for robust predictions
+- **Advanced Feature Engineering**: Creates 100+ features including team performance metrics, head-to-head statistics, rest days, player impact, and travel data
+- **Enhanced Machine Learning**: Combines multiple algorithms (XGBoost, LightGBM, deep learning) with stacking and calibration
 - **Time-Series Validation**: Uses proper time-series cross-validation to prevent data leakage
-- **Confidence Scoring**: Provides confidence metrics for each prediction
+- **Improved Confidence Scoring**: Provides robust confidence metrics for each prediction
 - **Multiple Models**: Supports ensemble, deep learning, and hybrid prediction approaches
 
 ## Project Structure
@@ -22,20 +32,28 @@ src/
 ├── __init__.py
 ├── data/
 │   ├── __init__.py
-│   └── data_loader.py          # Data fetching from NBA API
+│   └── data_loader.py             # Data fetching from NBA API
 ├── features/
 │   ├── __init__.py
-│   └── feature_processor.py    # Feature engineering 
+│   ├── feature_processor.py       # Feature engineering
+│   └── advanced/
+│       ├── __init__.py
+│       └── player_availability.py # Player impact features
 ├── models/
 │   ├── __init__.py
-│   ├── deep_model.py           # Deep learning models
-│   └── ensemble_model.py       # XGBoost ensemble models
+│   ├── deep_model.py              # Standard deep learning models
+│   ├── enhanced_deep_model.py     # Enhanced neural networks
+│   ├── ensemble_model.py          # Standard XGBoost ensemble models
+│   ├── enhanced_ensemble.py       # Enhanced ensemble with multiple algorithms
+│   └── hybrid_model.py            # Advanced model integration
 ├── utils/
 │   ├── __init__.py
-│   ├── constants.py            # Shared constants
-│   └── helpers.py              # Utility functions
-└── predictor.py                # Main predictor class
-main.py                         # Entry point
+│   ├── constants.py               # Shared constants
+│   ├── helpers.py                 # Utility functions
+│   └── scaling/
+│       └── enhanced_scaler.py     # Robust feature scaling
+└── predictor.py                   # Main predictor class
+main.py                            # Entry point
 ```
 
 ## Installation
@@ -56,17 +74,39 @@ pip install -r requirements.txt
 Run the main script to train the model and make predictions:
 
 ```bash
+# Use enhanced models (default)
 python main.py
+
+# Use standard models
+python main.py --standard
+
+# Specify seasons to use for training
+python main.py --seasons 2021-22 2022-23
+
+# Use quick mode for faster testing with simplified models
+python main.py --quick
 ```
+
+The `--quick` flag enables a faster testing mode that:
+- Uses fewer cross-validation folds (2 instead of 5)
+- Uses simplified model architectures
+- Runs fewer training epochs
+- Performs less hyperparameter optimization
+
+This mode is useful for development and testing purposes, but for the highest accuracy, run without the quick flag.
 
 ## Example Code
 
 ```python
 from src.predictor import EnhancedNBAPredictor
 
-# Initialize the predictor with seasons to include
-seasons = ['2020-21', '2021-22', '2022-23', '2023-24']
-predictor = EnhancedNBAPredictor(seasons)
+# Initialize the predictor with enhanced models
+seasons = ['2022-23', '2023-24']  # Recent seasons for better predictions
+predictor = EnhancedNBAPredictor(
+    seasons=seasons,
+    use_enhanced_models=True,  # Use enhanced models for higher accuracy
+    quick_mode=False  # Set to True for faster testing/development
+)
 
 # Fetch and process data
 predictor.fetch_and_process_data()
@@ -82,28 +122,63 @@ prediction = predictor.predict_game(
 )
 
 # Print prediction results
+print(f"Home team: {prediction['home_team']} vs Away team: {prediction['away_team']}")
 print(f"Home win probability: {prediction['home_win_probability']:.2f}")
 print(f"Confidence: {prediction['confidence']:.2f}")
+
+# Make another prediction with a different matchup
+prediction2 = predictor.predict_game(
+    home_team_id=1610612747,  # LAL
+    away_team_id=1610612744,  # GSW
+    model_type='hybrid'
+)
+
+print(f"Home team: {prediction2['home_team']} vs Away team: {prediction2['away_team']}")
+print(f"Home win probability: {prediction2['home_win_probability']:.2f}")
+print(f"Confidence: {prediction2['confidence']:.2f}")
 ```
 
 ## Model Details
 
-### Features
+### New Features
 
-The system generates features including:
-- Win percentages over various time windows
-- Offensive/defensive ratings and differentials
-- Rest day advantages
-- Travel distance and timezone changes
-- Head-to-head historical performance
-- Team consistency metrics
-- Momentum indicators
+The enhanced system includes additional features:
+- Player availability impact scores
+- Team strength adjustments based on available players
+- Player impact momentum features
+- Feature stability scores for confidence calculation
+- Model consensus metrics
 
-### Models
+### Enhanced Models
 
-1. **Ensemble Model**: Uses XGBoost with time-window specific models combined for optimal performance
-2. **Deep Learning Model**: Multi-layer neural network with batch normalization and dropout
-3. **Hybrid Model**: Combines predictions from both models
+1. **Enhanced Ensemble Model**:
+   - Uses both XGBoost and LightGBM with optimized hyperparameters
+   - Implements model stacking and probability calibration
+   - Features improved confidence scoring with uncertainty quantification
+   - Includes feature stability analysis for more robust feature selection
+   - Supports configurable cross-validation folds for speed/accuracy tradeoffs
+
+2. **Enhanced Deep Learning Model**:
+   - Implements residual connections for improved gradient flow
+   - Uses self-attention mechanisms to capture feature relationships
+   - Applies Monte Carlo dropout for uncertainty estimation
+   - Features learning rate scheduling with cosine annealing
+   - Supports configurable network architecture and training parameters
+   - Includes early stopping and gradient clipping for stable training
+
+3. **Advanced Hybrid Model**:
+   - Uses dynamic weighting between models based on prediction strengths
+   - Implements meta-learning to optimize model integration
+   - Provides unified confidence scores that account for model uncertainty
+   - Offers streamlined quick mode for rapid development and testing
+   - Features improved robustness through model consensus metrics
+
+4. **Performance Optimizations**:
+   - Enhanced data scaling with robust handling of extreme values
+   - Improved feature alignment with optimized memory usage
+   - Quick mode for faster testing and development iterations
+   - Configurable training parameters for different use cases
+   - Comprehensive error handling and fallback mechanisms for production reliability
 
 ## Requirements
 
@@ -112,6 +187,7 @@ The system generates features including:
 - numpy
 - scikit-learn
 - xgboost
+- lightgbm (new)
 - pytorch
 - nba_api
 - geopy

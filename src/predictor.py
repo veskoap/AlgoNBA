@@ -7,30 +7,81 @@ from typing import List, Dict, Tuple, Optional, Union, Set
 
 from src.data.data_loader import NBADataLoader
 from src.features.feature_processor import NBAFeatureProcessor
+from src.features.advanced.player_availability import PlayerAvailabilityProcessor
 from src.models.ensemble_model import NBAEnsembleModel
+from src.models.enhanced_ensemble import NBAEnhancedEnsembleModel
 from src.models.deep_model import DeepModelTrainer
+from src.models.enhanced_deep_model import EnhancedDeepModelTrainer
+from src.models.hybrid_model import HybridModel
 from src.utils.constants import DEFAULT_LOOKBACK_WINDOWS, FEATURE_REGISTRY
 
 
 class EnhancedNBAPredictor:
     """Main class for NBA prediction system."""
     
-    def __init__(self, seasons: List[str], lookback_windows: List[int] = None):
+    def __init__(self, seasons: List[str], lookback_windows: List[int] = None, 
+                use_enhanced_models: bool = True, quick_mode: bool = False):
         """
         Initialize the NBA prediction system.
         
         Args:
-            seasons: List of NBA seasons in format 'YYYY-YY'
-            lookback_windows: List of day windows for rolling statistics (default: [7, 14, 30, 60])
+            seasons: List of NBA seasons in format 'YYYY-YY' (e.g., '2022-23')
+                    More recent seasons will provide better predictions
+            lookback_windows: List of day windows for rolling statistics 
+                              (default: [7, 14, 30, 60])
+            use_enhanced_models: Whether to use enhanced models or standard ones.
+                                 Enhanced models offer higher accuracy but may take
+                                 longer to train.
+            quick_mode: Whether to run in quick test mode with simplified models.
+                        When True:
+                        - Uses fewer cross-validation folds (2 instead of 5)
+                        - Uses simpler model architectures
+                        - Runs fewer training epochs
+                        - Performs less hyperparameter optimization
+                        Useful for development and testing, but for highest accuracy,
+                        set to False.
         """
         self.seasons = seasons
         self.lookback_windows = lookback_windows or DEFAULT_LOOKBACK_WINDOWS
+        self.use_enhanced_models = use_enhanced_models
+        self.quick_mode = quick_mode
         
         # Initialize components
         self.data_loader = NBADataLoader()
         self.feature_processor = NBAFeatureProcessor(self.lookback_windows)
-        self.ensemble_model = NBAEnsembleModel()
-        self.deep_model_trainer = DeepModelTrainer()
+        self.player_processor = PlayerAvailabilityProcessor()
+        
+        # Initialize appropriate models based on flag
+        if use_enhanced_models:
+            if self.quick_mode:
+                # Use simplified models for quick testing
+                self.ensemble_model = NBAEnhancedEnsembleModel(
+                    use_calibration=False, 
+                    use_stacking=False,
+                    n_folds=2  # Use fewer folds for faster testing
+                )
+                self.deep_model_trainer = EnhancedDeepModelTrainer(
+                    use_residual=False, 
+                    use_attention=False, 
+                    use_mc_dropout=False,
+                    epochs=5,  # Very few epochs for quick testing
+                    hidden_layers=[64, 32],  # Simplified architecture
+                    n_folds=2  # Fewer folds for faster testing
+                )
+                self.hybrid_model = HybridModel(
+                    ensemble_model=self.ensemble_model,
+                    deep_model=self.deep_model_trainer,
+                    quick_mode=True
+                )
+            else:
+                # Use full models
+                self.ensemble_model = NBAEnhancedEnsembleModel()
+                self.deep_model_trainer = EnhancedDeepModelTrainer()
+                self.hybrid_model = HybridModel()
+        else:
+            self.ensemble_model = NBAEnsembleModel()
+            self.deep_model_trainer = DeepModelTrainer()
+            self.hybrid_model = None
         
         # Storage for models and data
         self.games = None
@@ -49,6 +100,25 @@ class EnhancedNBAPredictor:
         print("Calculating team statistics...")
         self.stats_df = self.feature_processor.calculate_team_stats(self.games)
         
+        # Calculate player availability impact (new)
+        print("Calculating player availability impact...")
+        player_features = self.player_processor.calculate_player_impact_features(self.games)
+        
+        # Merge player features with team stats
+        self.stats_df = self.stats_df.merge(
+            player_features,
+            on=['GAME_DATE', 'TEAM_ID_HOME', 'TEAM_ID_AWAY'],
+            how='left'
+        )
+        
+        # Fill missing player impact with default values
+        if 'PLAYER_IMPACT_HOME' not in self.stats_df.columns:
+            self.stats_df['PLAYER_IMPACT_HOME'] = 1.0
+        if 'PLAYER_IMPACT_AWAY' not in self.stats_df.columns:
+            self.stats_df['PLAYER_IMPACT_AWAY'] = 1.0
+        if 'PLAYER_IMPACT_DIFF' not in self.stats_df.columns:
+            self.stats_df['PLAYER_IMPACT_DIFF'] = self.stats_df['PLAYER_IMPACT_HOME'] - self.stats_df['PLAYER_IMPACT_AWAY']
+        
         # Prepare features
         print("Preparing features...")
         self.features, self.targets = self.feature_processor.prepare_features(self.stats_df)
@@ -61,21 +131,27 @@ class EnhancedNBAPredictor:
         self.features = pd.concat([self.features, pd.DataFrame(additional_cols, index=self.features.index)], axis=1)
         
     def train_models(self) -> None:
-        """Train both ensemble and deep learning models."""
+        """Train all prediction models."""
         if self.features is None:
             raise ValueError("Features not available. Call fetch_and_process_data first.")
         
-        # Train ensemble model
-        print("\nTraining ensemble model...")
-        self.ensemble_model.train(self.features)
-        
-        # Train deep model
-        print("\nTraining deep learning model...")
-        self.deep_model_trainer.train_deep_model(self.features)
+        if self.use_enhanced_models:
+            # Train the hybrid model (which trains both ensemble and deep models)
+            print("\nTraining advanced hybrid model...")
+            self.hybrid_model.train(self.features)
+        else:
+            # Train models separately
+            # Train ensemble model
+            print("\nTraining ensemble model...")
+            self.ensemble_model.train(self.features)
+            
+            # Train deep model
+            print("\nTraining deep learning model...")
+            self.deep_model_trainer.train_deep_model(self.features)
         
     def predict(self, 
                 features: pd.DataFrame,
-                model_type: str = 'ensemble') -> Tuple[np.ndarray, np.ndarray]:
+                model_type: str = 'hybrid') -> Tuple[np.ndarray, np.ndarray]:
         """
         Make predictions with confidence scores.
         
@@ -87,22 +163,33 @@ class EnhancedNBAPredictor:
             tuple: (predictions, confidence_scores)
         """
         if model_type == 'ensemble':
-            return self.ensemble_model.predict_with_confidence(features)
+            if self.use_enhanced_models:
+                return self.ensemble_model.predict_with_confidence(features)
+            else:
+                return self.ensemble_model.predict_with_confidence(features)
         elif model_type == 'deep':
-            predictions = self.deep_model_trainer.predict(features)
-            confidence_scores = self.ensemble_model.calculate_confidence_score(predictions, features)
-            return predictions, confidence_scores
+            if self.use_enhanced_models:
+                preds, uncertainties = self.deep_model_trainer.predict_with_uncertainty(features)
+                confidence_scores = self.deep_model_trainer.calculate_confidence_from_uncertainty(preds, uncertainties)
+                return preds, confidence_scores
+            else:
+                predictions = self.deep_model_trainer.predict(features)
+                confidence_scores = self.ensemble_model.calculate_confidence_score(predictions, features)
+                return predictions, confidence_scores
         elif model_type == 'hybrid':
-            # Get predictions from both models
-            ensemble_preds = self.ensemble_model.predict(features)
-            deep_preds = self.deep_model_trainer.predict(features)
-            
-            # Average the predictions (weighted equally for now)
-            hybrid_preds = (ensemble_preds + deep_preds) / 2
-            
-            # Use ensemble model for confidence scores
-            confidence_scores = self.ensemble_model.calculate_confidence_score(hybrid_preds, features)
-            return hybrid_preds, confidence_scores
+            if self.use_enhanced_models:
+                return self.hybrid_model.predict_with_confidence(features)
+            else:
+                # Get predictions from both models
+                ensemble_preds = self.ensemble_model.predict(features)
+                deep_preds = self.deep_model_trainer.predict(features)
+                
+                # Average the predictions (weighted equally for now)
+                hybrid_preds = (ensemble_preds + deep_preds) / 2
+                
+                # Use ensemble model for confidence scores
+                confidence_scores = self.ensemble_model.calculate_confidence_score(hybrid_preds, features)
+                return hybrid_preds, confidence_scores
         else:
             raise ValueError("Invalid model_type. Choose from 'ensemble', 'deep', or 'hybrid'.")
             
@@ -116,12 +203,15 @@ class EnhancedNBAPredictor:
         Returns:
             dict: Feature names and importance scores
         """
-        return self.ensemble_model.get_top_features(n)
+        if self.use_enhanced_models and self.hybrid_model:
+            return self.hybrid_model.get_feature_importances(n)
+        else:
+            return self.ensemble_model.get_top_features(n)
     
     def prepare_game_prediction(self, 
-                                home_team_id: int, 
-                                away_team_id: int,
-                                game_date: Optional[str] = None) -> pd.DataFrame:
+                              home_team_id: int, 
+                              away_team_id: int,
+                              game_date: Optional[str] = None) -> pd.DataFrame:
         """
         Prepare features for a specific game prediction using the standardized feature pipeline.
         
@@ -190,7 +280,7 @@ class EnhancedNBAPredictor:
         if not h2h_stats.empty:
             h2h_recent = h2h_stats.iloc[0]
             for col in ['H2H_GAMES', 'H2H_WIN_PCT', 'DAYS_SINCE_H2H', 'LAST_GAME_HOME', 
-                      'H2H_AVG_MARGIN', 'H2H_STREAK', 'H2H_HOME_ADVANTAGE', 'H2H_MOMENTUM']:
+                       'H2H_AVG_MARGIN', 'H2H_STREAK', 'H2H_HOME_ADVANTAGE', 'H2H_MOMENTUM']:
                 if col in h2h_recent:
                     new_game[col] = h2h_recent[col]
         else:
@@ -207,6 +297,20 @@ class EnhancedNBAPredictor:
             }
             for col, val in h2h_defaults.items():
                 new_game[col] = val
+                
+        # Add player impact features (default values)
+        if 'PLAYER_IMPACT_HOME' not in new_game:
+            new_game['PLAYER_IMPACT_HOME'] = 1.0
+        if 'PLAYER_IMPACT_AWAY' not in new_game:
+            new_game['PLAYER_IMPACT_AWAY'] = 1.0
+        if 'PLAYER_IMPACT_DIFF' not in new_game:
+            new_game['PLAYER_IMPACT_DIFF'] = new_game['PLAYER_IMPACT_HOME'] - new_game['PLAYER_IMPACT_AWAY']
+        if 'PLAYER_IMPACT_HOME_MOMENTUM' not in new_game:
+            new_game['PLAYER_IMPACT_HOME_MOMENTUM'] = 1.0
+        if 'PLAYER_IMPACT_AWAY_MOMENTUM' not in new_game:
+            new_game['PLAYER_IMPACT_AWAY_MOMENTUM'] = 1.0
+        if 'PLAYER_IMPACT_MOMENTUM_DIFF' not in new_game:
+            new_game['PLAYER_IMPACT_MOMENTUM_DIFF'] = 0.0
             
         # Process features for this game
         game_df = pd.DataFrame([new_game])
@@ -296,10 +400,10 @@ class EnhancedNBAPredictor:
         return required_features
     
     def predict_game(self, 
-                     home_team_id: int, 
-                     away_team_id: int,
-                     game_date: Optional[str] = None,
-                     model_type: str = 'hybrid') -> Dict:
+                   home_team_id: int, 
+                   away_team_id: int,
+                   game_date: Optional[str] = None,
+                   model_type: str = 'hybrid') -> Dict:
         """
         Predict the outcome of a specific game with improved feature compatibility.
         

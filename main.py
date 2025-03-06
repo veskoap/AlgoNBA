@@ -1,8 +1,29 @@
 """
 Main entry point for the NBA Prediction System.
+
+This script provides a command-line interface to the NBA prediction system, 
+allowing users to train models and generate predictions with various options:
+
+- Enhanced vs standard models: Control accuracy vs complexity tradeoff
+- Season selection: Choose which NBA seasons to use for training
+- Quick mode: Faster execution for testing and development
+
+Example usage:
+    # Train with enhanced models (default)
+    python main.py
+    
+    # Use standard models instead
+    python main.py --standard
+    
+    # Specify specific seasons
+    python main.py --seasons 2022-23 2023-24
+    
+    # Run in quick mode for faster testing
+    python main.py --quick
 """
 import sys
 import pandas as pd
+import argparse
 from src.predictor import EnhancedNBAPredictor
 
 
@@ -10,13 +31,34 @@ def main():
     """
     Initialize and run the NBA prediction model.
     """
-    print("Starting NBA prediction system...")
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(description='NBA Game Prediction System')
+    parser.add_argument('--standard', action='store_true', 
+                      help='Use standard models instead of enhanced models. Standard models '
+                           'are simpler but may be less accurate than enhanced models.')
+    parser.add_argument('--seasons', nargs='+', default=['2022-23', '2023-24'],
+                      help='NBA seasons to use for training (format: YYYY-YY). '
+                           'More recent seasons provide better predictions. '
+                           'Example: --seasons 2021-22 2022-23 2023-24')
+    parser.add_argument('--quick', action='store_true', 
+                      help='Run with simplified models for quick testing. '
+                           'Uses fewer folds, simpler architectures, and fewer training '
+                           'epochs. Useful for development and testing, not for '
+                           'production-quality predictions.')
+    args = parser.parse_args()
     
-    # Use seasons from 2020-21 to 2023-24
-    seasons = ['2020-21', '2021-22', '2022-23', '2023-24']
+    # Use enhanced models by default unless --standard flag is provided
+    use_enhanced = not args.standard
+    model_type = "enhanced" if use_enhanced else "standard"
     
-    # Initialize the predictor
-    predictor = EnhancedNBAPredictor(seasons)
+    print(f"Starting NBA prediction system with {model_type} models...")
+    
+    # Initialize the predictor with specified settings
+    predictor = EnhancedNBAPredictor(
+        seasons=args.seasons,
+        use_enhanced_models=use_enhanced,
+        quick_mode=args.quick
+    )
     
     try:
         # Fetch and process data
@@ -46,6 +88,17 @@ def main():
         print(f"Boston Celtics vs Milwaukee Bucks:")
         print(f"Home win probability: {prediction['home_win_probability']:.2f}")
         print(f"Confidence: {prediction['confidence']:.2f}")
+        
+        # Additional prediction with different matchup
+        prediction2 = predictor.predict_game(
+            home_team_id=1610612747,  # LAL
+            away_team_id=1610612744,  # GSW
+            model_type='hybrid'
+        )
+        
+        print(f"\nLos Angeles Lakers vs Golden State Warriors:")
+        print(f"Home win probability: {prediction2['home_win_probability']:.2f}")
+        print(f"Confidence: {prediction2['confidence']:.2f}")
         
         print("\nNBA prediction system ready!")
         

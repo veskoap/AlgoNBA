@@ -7,14 +7,26 @@ from sklearn.preprocessing import StandardScaler
 
 
 class EnhancedScaler:
-    """Scaler with enhanced robustness for extreme values and missing data."""
+    """
+    Scaler with enhanced robustness for extreme values and missing data.
+    
+    This scaler extends standard scaling functionality with additional features:
+    - Handles extreme values by clipping outliers
+    - Gracefully manages missing values (NaN, inf)
+    - Provides fallback mechanisms when standard scaling fails
+    - Automatically aligns feature columns for prediction
+    - Optimizes memory usage with efficient DataFrame operations
+    """
     
     def __init__(self, clip_threshold=5.0):
         """
         Initialize enhanced scaler.
         
         Args:
-            clip_threshold: Values outside this many standard deviations will be clipped
+            clip_threshold: Values outside this many standard deviations will be clipped.
+                          Higher values (e.g., 10.0) preserve more extreme values,
+                          while lower values (e.g., 3.0) are more aggressive in outlier removal.
+                          Default of 5.0 balances outlier handling with data preservation.
         """
         self.scaler = StandardScaler()
         self.clip_threshold = clip_threshold
@@ -64,9 +76,14 @@ class EnhancedScaler:
             extra_cols = [col for col in X.columns if col not in self.feature_names]
             
             if missing_cols:
-                X_aligned = X.copy()
-                for col in missing_cols:
-                    X_aligned[col] = 0  # Fill missing columns with zeros
+                # Create a dictionary with all missing columns and their default values
+                missing_dict = {col: 0 for col in missing_cols}
+                
+                # Create DataFrame with missing columns all at once to avoid fragmentation
+                missing_df = pd.DataFrame(missing_dict, index=X.index)
+                
+                # Concatenate with original DataFrame
+                X_aligned = pd.concat([X.copy(), missing_df], axis=1)
                 
                 # Reorder columns to match training order
                 X_aligned = X_aligned[self.feature_names]
