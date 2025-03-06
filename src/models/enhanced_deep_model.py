@@ -725,7 +725,7 @@ class EnhancedDeepModelTrainer:
                     
                     # Forward pass with mixed precision (if enabled)
                     if scaler is not None:
-                        with autocast(device_type='cuda'):
+                        with autocast(device_type='cuda' if torch.cuda.is_available() else 'cpu'):
                             outputs = model(inputs)
                             loss = criterion(outputs, targets)
                         
@@ -921,6 +921,12 @@ class EnhancedDeepModelTrainer:
             ensemble_preds = np.full(len(X), 0.5)
             print("Warning: Using default predictions (0.5) as all deep models failed")
         
+        # Final NaN check
+        if np.isnan(ensemble_preds).any():
+            print("Error: Input contains NaN. Replacing with default values.")
+            # Replace NaNs with default probability of 0.5
+            ensemble_preds = np.nan_to_num(ensemble_preds, nan=0.5)
+        
         return ensemble_preds
         
     def _prepare_aligned_features(self, X: pd.DataFrame, scaler, fold_idx: int) -> pd.DataFrame:
@@ -1114,7 +1120,7 @@ class EnhancedDeepModelTrainer:
                     
                     # Forward pass with mixed precision if available
                     if self.use_amp and torch.cuda.is_available():
-                        with autocast():
+                        with autocast(device_type='cuda' if torch.cuda.is_available() else 'cpu'):
                             outputs = model(inputs)
                     else:
                         outputs = model(inputs)
@@ -1170,7 +1176,7 @@ class EnhancedDeepModelTrainer:
                 
                 # Forward pass with mixed precision if available
                 if self.use_amp and torch.cuda.is_available():
-                    with autocast(device_type='cuda'):
+                    with autocast(device_type='cuda' if torch.cuda.is_available() else 'cpu'):
                         outputs = model(inputs)
                 else:
                     outputs = model(inputs)
@@ -1279,6 +1285,13 @@ class EnhancedDeepModelTrainer:
             # Ensure uncertainties are in reasonable range
             calibrated_uncertainties = np.clip(calibrated_uncertainties, 0.05, 0.5)
             
+            # Final NaN check
+            if np.isnan(final_predictions).any() or np.isnan(calibrated_uncertainties).any():
+                print("Error: Input contains NaN. Replacing with default values.")
+                # Replace NaNs with defaults
+                final_predictions = np.nan_to_num(final_predictions, nan=0.5)
+                calibrated_uncertainties = np.nan_to_num(calibrated_uncertainties, nan=0.2)
+            
             return final_predictions, calibrated_uncertainties
         else:
             # Default if all models failed
@@ -1329,7 +1342,7 @@ class EnhancedDeepModelTrainer:
                         
                         # Forward pass with mixed precision if available
                         if self.use_amp and torch.cuda.is_available():
-                            with autocast(device_type='cuda'):
+                            with autocast(device_type='cuda' if torch.cuda.is_available() else 'cpu'):
                                 outputs = model(inputs)
                         else:
                             outputs = model(inputs)
