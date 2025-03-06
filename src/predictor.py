@@ -264,31 +264,91 @@ class EnhancedNBAPredictor:
         
         # First check if player_features has data before attempting merge
         if player_features is not None and not player_features.empty:
-            # Log merge details
-            print(f"Merging player availability data with {len(player_features)} records")
+            # Log merge details more verbosely
+            print(f"Merging {len(player_features)} player availability records with features")
+            print(f"Features columns before merge: {self.stats_df.columns[:5]}...")
+            print(f"Home player data columns: {player_features.columns[:5]}...")
+            
+            # Ensure all key merge columns exist
+            missing_cols = []
+            for col in ['GAME_DATE', 'TEAM_ID_HOME', 'TEAM_ID_AWAY']:
+                if col not in player_features.columns:
+                    missing_cols.append(col)
+                    print(f"Missing column {col} in player_features - creating it")
+                    # Add missing column with default values
+                    if col == 'GAME_DATE':
+                        player_features[col] = pd.to_datetime('2022-10-01')
+                    else:
+                        player_features[col] = 0
+                        
+            if missing_cols:
+                print(f"Created {len(missing_cols)} missing columns in player_features")
             
             # Ensure both dataframes have matching dtypes for merge columns
             for col in ['GAME_DATE', 'TEAM_ID_HOME', 'TEAM_ID_AWAY']:
                 if col in player_features.columns and col in self.stats_df.columns:
                     # Ensure consistent types for merge columns
-                    if player_features[col].dtype != self.stats_df[col].dtype:
-                        print(f"Converting {col} in player_features from {player_features[col].dtype} to {self.stats_df[col].dtype}")
-                        player_features[col] = player_features[col].astype(self.stats_df[col].dtype)
+                    try:
+                        if player_features[col].dtype != self.stats_df[col].dtype:
+                            print(f"Converting {col} in player_features from {player_features[col].dtype} to {self.stats_df[col].dtype}")
+                            player_features[col] = player_features[col].astype(self.stats_df[col].dtype)
+                    except Exception as e:
+                        print(f"Error converting column {col}: {e} - using safer conversion")
+                        # Use a safer conversion method
+                        if col == 'GAME_DATE':
+                            player_features[col] = pd.to_datetime(player_features[col])
+                        else:
+                            player_features[col] = pd.to_numeric(player_features[col], errors='coerce').fillna(0).astype(int)
             
             # Merge player features with team stats
             original_len = len(self.stats_df)
             try:
-                self.stats_df = self.stats_df.merge(
+                # Store original stats_df for fallback
+                original_stats_df = self.stats_df.copy()
+                
+                # Attempt merge
+                merged_df = self.stats_df.merge(
                     player_features,
                     on=['GAME_DATE', 'TEAM_ID_HOME', 'TEAM_ID_AWAY'],
                     how='left'
                 )
-                merged_len = len(self.stats_df)
+                merged_len = len(merged_df)
+                
                 if merged_len != original_len:
                     print(f"Warning: Merge changed dataframe length from {original_len} to {merged_len}")
+                    # If merge significantly changed the shape, add availability columns to original DataFrame
+                    if abs(merged_len - original_len) > 0.1 * original_len:
+                        print(f"Significant change in data size detected. Using alternative merge approach")
+                        # Restore original and add columns individually
+                        self.stats_df = original_stats_df
+                        for col in player_features.columns:
+                            if col not in ['GAME_DATE', 'TEAM_ID_HOME', 'TEAM_ID_AWAY'] and col not in self.stats_df.columns:
+                                print(f"Adding column {col} with default values")
+                                # Add missing column with default values
+                                if 'IMPACT' in col or 'MOMENTUM' in col:
+                                    self.stats_df[col] = 1.0
+                                else:
+                                    self.stats_df[col] = 0.0
+                    else:
+                        # Small change, accept the merge
+                        self.stats_df = merged_df
+                else:
+                    # Merge was successful with no change in length
+                    self.stats_df = merged_df
+                    print(f"Successfully merged player data with {len(self.stats_df)} features")
+                    
             except Exception as e:
                 print(f"Error merging player availability data: {e}")
                 # Handle the error by continuing without merging
+                # Add essential columns with default values
+                for col in ['PLAYER_IMPACT_HOME', 'PLAYER_IMPACT_AWAY', 'PLAYER_IMPACT_DIFF', 
+                           'PLAYER_IMPACT_HOME_MOMENTUM', 'PLAYER_IMPACT_AWAY_MOMENTUM', 'PLAYER_IMPACT_MOMENTUM_DIFF']:
+                    if col not in self.stats_df.columns:
+                        print(f"Adding essential column {col} with default values")
+                        if 'DIFF' in col:
+                            self.stats_df[col] = 0.0
+                        else:
+                            self.stats_df[col] = 1.0
         else:
             print("No player availability data found to merge")
             

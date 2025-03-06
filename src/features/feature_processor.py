@@ -174,11 +174,36 @@ class FeatureTransformer:
             away_col = dependencies[1]  # WIN_PCT_AWAY_{window}D
             
             # Make sure we're returning a Series, not a DataFrame
-            # Add error handling to avoid the DataFrame.dtype issue
             try:
-                # Safe subtraction with explicit Series conversion
+                # Get home win percentage, safely handling DataFrame case
+                home_series = df[home_col]
+                if isinstance(home_series, pd.DataFrame):
+                    # If it's a DataFrame, extract first column
+                    print(f"Converting {home_col} from DataFrame to Series")
+                    if len(home_series.columns) > 0:
+                        home_values = home_series.iloc[:, 0].values
+                    else:
+                        home_values = np.zeros(len(df))
+                else:
+                    # It's a Series, use values directly
+                    home_values = home_series.values
+                
+                # Get away win percentage, safely handling DataFrame case
+                away_series = df[away_col]
+                if isinstance(away_series, pd.DataFrame):
+                    # If it's a DataFrame, extract first column
+                    print(f"Converting {away_col} from DataFrame to Series")
+                    if len(away_series.columns) > 0:
+                        away_values = away_series.iloc[:, 0].values
+                    else:
+                        away_values = np.zeros(len(df))
+                else:
+                    # It's a Series, use values directly
+                    away_values = away_series.values
+                
+                # Create Series explicitly using the cleaned values
                 result = pd.Series(
-                    df[home_col].values - df[away_col].values,
+                    home_values - away_values,
                     index=df.index,
                     name=feature_name
                 )
@@ -366,24 +391,42 @@ class FeatureTransformer:
             rest_diff = dependencies[1]  # REST_DIFF
             
             try:
-                # Handle the case where WIN_PCT_DIFF_30D might be a DataFrame
+                # Get win percentage difference, safely handling DataFrame case
                 win_pct_series = df[win_pct_diff]
-                if hasattr(win_pct_series, 'values'):
-                    win_pct_values = win_pct_series.values
+                if isinstance(win_pct_series, pd.DataFrame):
+                    # If it's a DataFrame, extract first column
+                    print(f"Converting {win_pct_diff} from DataFrame to Series")
+                    if len(win_pct_series.columns) > 0:
+                        win_pct_values = win_pct_series.iloc[:, 0].values
+                    else:
+                        win_pct_values = np.zeros(len(df))
                 else:
-                    # If it's already a DataFrame, try to extract the first column
-                    print(f"Warning: {win_pct_diff} is not a Series, converting to values")
-                    win_pct_values = np.zeros(len(df))
+                    # It's a Series, use values directly
+                    win_pct_values = win_pct_series.values
                 
-                # Create Series explicitly
+                # Get rest difference, safely handling DataFrame case
+                rest_series = df[rest_diff]
+                if isinstance(rest_series, pd.DataFrame):
+                    # If it's a DataFrame, extract first column
+                    print(f"Converting {rest_diff} from DataFrame to Series")
+                    if len(rest_series.columns) > 0:
+                        rest_values = rest_series.iloc[:, 0].values
+                    else:
+                        rest_values = np.zeros(len(df))
+                else:
+                    # It's a Series, use values directly
+                    rest_values = rest_series.values
+                
+                # Create Series explicitly using the cleaned values
                 result = pd.Series(
-                    win_pct_values * df[rest_diff].values,
+                    win_pct_values * rest_values,
                     index=df.index,
                     name=feature_name
                 )
                 return result
             except Exception as e:
                 print(f"Error calculating {feature_name}: {e}")
+                # Return a default zero Series
                 return pd.Series(0, index=df.index, name=feature_name)
             
         elif feature_name == 'MATCHUP_COMPATIBILITY':
