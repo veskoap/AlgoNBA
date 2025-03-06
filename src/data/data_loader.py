@@ -614,11 +614,30 @@ class NBADataLoader:
                         # Try different parameter combinations for TeamPlayerDashboard
                         try:
                             # First attempt with nullable parameter
-                            team_players = teamplayerdashboard.TeamPlayerDashboard(
-                                team_id=team_id,
-                                season=season,
-                                season_type_nullable='Regular Season'
-                            ).get_data_frames()[1]  # [1] contains individual player data
+                            try:
+                                # Try with advanced metrics for PIE data
+                                from nba_api.stats.endpoints import teamplayerdashboardbyclutch
+                                # This endpoint is more likely to contain PIE data
+                                dashboard = teamplayerdashboardbyclutch.TeamPlayerDashboardByClutch(
+                                    team_id=team_id,
+                                    season=season,
+                                    per_mode_simple='PerGame'
+                                ).get_data_frames()
+                                
+                                # The first dataframe has overall stats
+                                team_players = dashboard[0]
+                                
+                                # If we don't get PIE here, try another endpoint
+                                if 'PIE' not in team_players.columns:
+                                    raise ValueError("PIE not found in clutch dashboard, trying standard dashboard")
+                                    
+                            except Exception as e:
+                                # Fallback to standard dashboard
+                                team_players = teamplayerdashboard.TeamPlayerDashboard(
+                                    team_id=team_id,
+                                    season=season,
+                                    per_mode_simple='PerGame'
+                                ).get_data_frames()[1]  # [1] contains individual player data
                         except:
                             try:
                                 # Second attempt with standard parameters
@@ -649,16 +668,59 @@ class NBADataLoader:
                         
                         # Calculate player impact scores based on stats
                         if not team_players.empty:
+                            # First check if we need to calculate PIE (if it's missing)
+                            if 'PIE' not in team_players.columns:
+                                print(f"PIE not available from API for team {self.get_team_abbrev(team_id)}, calculating manually")
+                                # Calculate a PIE-like metric ourselves when not available from API
+                                # Formula to approximate PIE based on available stats
+                                if all(col in team_players.columns for col in ['PTS', 'REB', 'AST', 'STL', 'BLK', 'MIN']):
+                                    team_players['PIE'] = (
+                                        (team_players['PTS'] + team_players['REB'] + team_players['AST'] + 
+                                         team_players['STL'] + team_players['BLK']) / 
+                                        (team_players['MIN'] + 1)  # Add 1 to avoid division by zero
+                                    ) / 10.0  # Scale to 0-1 range similar to PIE
+                                else:
+                                    # If needed statistics aren't available, create a simple proxy
+                                    team_players['PIE'] = 0.1  # Default value
+                            
+                            # Check for USG_PCT
+                            if 'USG_PCT' not in team_players.columns:
+                                print(f"USG_PCT not available for team {self.get_team_abbrev(team_id)}, calculating proxy")
+                                # Approximate usage percentage when not available
+                                if 'PTS' in team_players.columns and 'MIN' in team_players.columns:
+                                    team_players['USG_PCT'] = 10 + (team_players['PTS'] / team_players['MIN'] * 5)
+                                else:
+                                    team_players['USG_PCT'] = 20.0  # Default value
+                                    
                             # Create a more sophisticated impact score incorporating defensive and offensive metrics
-                            team_players['IMPACT_SCORE'] = (
-                                0.30 * team_players['PLUS_MINUS'] +
-                                0.25 * team_players['PIE'] * 100 +     # Player Impact Estimate
-                                0.15 * team_players['USG_PCT'] +       # Usage percentage 
-                                0.10 * team_players['MIN'] +           # Minutes played
-                                0.10 * (team_players['REB'] / team_players['MIN'] * 10) +  # Rebounding rate
-                                0.05 * (team_players['AST'] / team_players['MIN'] * 10) +  # Assist rate
-                                0.05 * ((team_players['STL'] + team_players['BLK']) / team_players['MIN'] * 10)  # Defensive rate
-                            ).fillna(0)
+                            # Using try/except to handle any missing columns with default values
+                            try:
+                                # Helper function to safely get column values with defaults
+                                def safe_get_col(df, col_name, default_value):
+                                    return df[col_name] if col_name in df.columns else pd.Series([default_value] * len(df))
+                                
+                                # Calculate impact score with safe column access
+                                team_players['IMPACT_SCORE'] = (
+                                    0.30 * safe_get_col(team_players, 'PLUS_MINUS', 0) +
+                                    0.25 * team_players['PIE'] * 100 +     # Player Impact Estimate (already verified)
+                                    0.15 * team_players['USG_PCT'] +       # Usage percentage (already verified)
+                                    0.10 * safe_get_col(team_players, 'MIN', 10) +   # Minutes played
+                                    0.10 * (safe_get_col(team_players, 'REB', 3) / 
+                                           (safe_get_col(team_players, 'MIN', 10) + 0.1) * 10) +  # Rebounding rate
+                                    0.05 * (safe_get_col(team_players, 'AST', 1) / 
+                                           (safe_get_col(team_players, 'MIN', 10) + 0.1) * 10) +  # Assist rate
+                                    0.05 * ((safe_get_col(team_players, 'STL', 0.5) + 
+                                             safe_get_col(team_players, 'BLK', 0.3)) / 
+                                            (safe_get_col(team_players, 'MIN', 10) + 0.1) * 10)  # Defensive rate
+                                ).fillna(0)
+                            except Exception as e:
+                                print(f"Error calculating impact score for team {self.get_team_abbrev(team_id)}: {e}")
+                                # Calculate a simplified impact score as fallback
+                                if 'PIE' in team_players.columns:
+                                    team_players['IMPACT_SCORE'] = team_players['PIE'] * 100
+                                else:
+                                    # Completely synthetic values
+                                    team_players['IMPACT_SCORE'] = 10.0
                             
                             # Add positional information from the league-wide stats
                             team_players['POSITION'] = team_players['PLAYER_ID'].map(
