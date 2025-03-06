@@ -108,12 +108,13 @@ class HybridModel:
         # Weight search parameters
         weight_results = {}
         
-        # Use fewer weights in quick mode but ensure coverage
+        # Use fewer weights in all modes for faster performance
         if self.quick_mode:
-            weights = [0.0, 0.25, 0.5, 0.75, 1.0]  # Representative sample
+            # Very minimal search in quick mode
+            weights = [0.0, 0.5, 1.0]  # Just check extremes and middle
         else:
-            # More granular weight search
-            weights = [round(x * 0.05, 2) for x in range(0, 21)]  # 0.0 to 1.0 in steps of 0.05
+            # More reasonable search space (11 weights instead of 21)
+            weights = [round(x * 0.1, 2) for x in range(0, 11)]  # 0.0 to 1.0 in steps of 0.1
             
         print(f"Searching across {len(weights)} different weight combinations")
         
@@ -131,14 +132,26 @@ class HybridModel:
                 'auc': []
             }
             
+            # Pre-compute model predictions and confidences for all validation folds
+            # to avoid redundant computation
+            fold_data = []
+            
             for _, val_idx in tscv.split(X):
                 # Use validation data for weight optimization
                 X_val = X.iloc[val_idx]
                 y_val = y.iloc[val_idx]
                 
+                # Store fold data
+                fold_info = {'X_val': X_val, 'y_val': y_val}
+                
                 # Get predictions from both models
+                print("Processing enhanced ensemble model predictions...")
                 ensemble_preds = self.ensemble_model.predict(X_val)
+                fold_info['ensemble_preds'] = ensemble_preds
+                
+                print("Processing enhanced deep model predictions...")
                 deep_preds = self.deep_model.predict(X_val)
+                fold_info['deep_preds'] = deep_preds
                 
                 # Track individual model performance for analysis
                 model_performance['ensemble']['correct'] += np.sum((ensemble_preds > 0.5).astype(int) == y_val)
@@ -146,52 +159,63 @@ class HybridModel:
                 model_performance['deep']['correct'] += np.sum((deep_preds > 0.5).astype(int) == y_val)
                 model_performance['deep']['total'] += len(y_val)
                 
-                # Calculate confidence/uncertainty
+                # Calculate confidence/uncertainty - handle errors properly
+                print("Processing enhanced deep model predictions with uncertainty...")
                 try:
+                    # Calculate and cache uncertainty
                     _, deep_uncertainties = self.deep_model.predict_with_uncertainty(X_val)
+                    fold_info['deep_uncertainties'] = deep_uncertainties
+                    
                     # Normalize uncertainties to [0,1]
-                    normalized_uncertainties = deep_uncertainties / (np.max(deep_uncertainties) + 1e-10)
+                    normalized_uncertainties = np.nan_to_num(
+                        deep_uncertainties / (np.max(deep_uncertainties) + 1e-10), 
+                        nan=0.5
+                    )
                     # Convert to confidence (1 - uncertainty)
                     deep_confidence = 1.0 - normalized_uncertainties
+                    fold_info['deep_confidence'] = deep_confidence
                 except Exception as e:
+                    print(f"Error: {e}. Using default confidence values.")
                     # Fallback if uncertainty calculation fails
-                    deep_confidence = 0.5 * np.ones_like(deep_preds)
+                    fold_info['deep_confidence'] = 0.5 * np.ones_like(deep_preds)
                 
+                # Enhanced confidence scores
                 try:
                     ensemble_confidence = self.ensemble_model.calculate_enhanced_confidence_score(ensemble_preds, X_val)
+                    fold_info['ensemble_confidence'] = ensemble_confidence
                 except Exception as e:
                     # Fallback if confidence calculation fails
-                    ensemble_confidence = 0.5 * np.ones_like(ensemble_preds)
+                    fold_info['ensemble_confidence'] = 0.5 * np.ones_like(ensemble_preds)
                 
-                # Three weighting strategies:
+                # Add to fold data collection
+                fold_data.append(fold_info)
+                
+            # Process all weight evaluations using the cached data
+            for fold_info in fold_data:
+                y_val = fold_info['y_val']
+                ensemble_preds = fold_info['ensemble_preds']
+                deep_preds = fold_info['deep_preds']
+                ensemble_confidence = fold_info['ensemble_confidence']
+                deep_confidence = fold_info['deep_confidence']
                 
                 # 1. Fixed weight (global weight parameter)
                 hybrid_preds_fixed = weight * ensemble_preds + (1 - weight) * deep_preds
                 
-                # 2. Confidence-based dynamic weighting
+                # 2. Confidence-based dynamic weighting (simpler version for speed)
                 # Calculate sample-specific weights based on relative confidence
                 confidence_sum = ensemble_confidence + deep_confidence + 1e-10  # Avoid division by zero
                 ensemble_weight_dynamic = ensemble_confidence / confidence_sum
                 deep_weight_dynamic = deep_confidence / confidence_sum
                 
-                # Apply dynamic weighting
-                hybrid_preds_dynamic = (
+                # Apply dynamic weighting - but with less complexity than before
+                hybrid_preds = (
                     ensemble_weight_dynamic * ensemble_preds + 
                     deep_weight_dynamic * deep_preds
                 )
                 
-                # 3. Combined approach (blend fixed and dynamic)
-                # Use more confidence-based weighting when confidence difference is high
-                confidence_diff = np.abs(ensemble_confidence - deep_confidence)
-                dynamic_blend_factor = np.minimum(confidence_diff * 2, 1.0)  # Scale to [0,1]
-                
-                # Final prediction is a blend of fixed and dynamic weighting
-                # When confidence difference is high, favor dynamic weighting
-                # When confidence difference is low, favor fixed weighting
-                hybrid_preds = (
-                    (1 - dynamic_blend_factor) * hybrid_preds_fixed + 
-                    dynamic_blend_factor * hybrid_preds_dynamic
-                )
+                # Apply global weight adjustment to balance fixed vs. dynamic
+                # This is a simplification of the previous approach but maintains the core benefit
+                hybrid_preds = 0.7 * hybrid_preds_fixed + 0.3 * hybrid_preds
                 
                 # Convert to binary predictions
                 y_pred_binary = (hybrid_preds > 0.5).astype(int)
