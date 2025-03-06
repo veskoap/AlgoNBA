@@ -72,6 +72,7 @@ FEATURE_GROUPS = {
     'H2H': 'Head-to-head matchups',
     'MATCHUP': 'Team matchup specialization',
     'PLAYER': 'Player impact modeling',
+    'INJURY': 'Player injury features',
     'CONTEXT': 'Contextual features',
     'TREND': 'Historical trend features'
 }
@@ -408,6 +409,116 @@ FEATURE_REGISTRY = {
         'description': 'Home team center advantage',
         'windows': None,
         'dependencies': ['CENTER_STRENGTH_HOME', 'CENTER_STRENGTH_AWAY'],
+    },
+    
+    # Player injury features
+    'HOME_INJURY_IMPACT': {
+        'type': 'injury',
+        'description': 'Home team total injury impact',
+        'windows': None,
+        'dependencies': [],
+    },
+    'AWAY_INJURY_IMPACT': {
+        'type': 'injury',
+        'description': 'Away team total injury impact',
+        'windows': None,
+        'dependencies': [],
+    },
+    'INJURY_IMPACT_DIFF': {
+        'type': 'injury',
+        'description': 'Difference in injury impact (home - away)',
+        'windows': None,
+        'dependencies': ['HOME_INJURY_IMPACT', 'AWAY_INJURY_IMPACT'],
+    },
+    'HOME_GUARD_INJURIES': {
+        'type': 'injury',
+        'description': 'Home team guard injury impact',
+        'windows': None,
+        'dependencies': [],
+    },
+    'AWAY_GUARD_INJURIES': {
+        'type': 'injury',
+        'description': 'Away team guard injury impact',
+        'windows': None,
+        'dependencies': [],
+    },
+    'GUARD_INJURY_DIFF': {
+        'type': 'injury',
+        'description': 'Difference in guard injury impact',
+        'windows': None,
+        'dependencies': ['HOME_GUARD_INJURIES', 'AWAY_GUARD_INJURIES'],
+    },
+    'HOME_FORWARD_INJURIES': {
+        'type': 'injury',
+        'description': 'Home team forward injury impact',
+        'windows': None,
+        'dependencies': [],
+    },
+    'AWAY_FORWARD_INJURIES': {
+        'type': 'injury',
+        'description': 'Away team forward injury impact',
+        'windows': None,
+        'dependencies': [],
+    },
+    'FORWARD_INJURY_DIFF': {
+        'type': 'injury',
+        'description': 'Difference in forward injury impact',
+        'windows': None,
+        'dependencies': ['HOME_FORWARD_INJURIES', 'AWAY_FORWARD_INJURIES'],
+    },
+    'HOME_CENTER_INJURIES': {
+        'type': 'injury',
+        'description': 'Home team center injury impact',
+        'windows': None,
+        'dependencies': [],
+    },
+    'AWAY_CENTER_INJURIES': {
+        'type': 'injury',
+        'description': 'Away team center injury impact',
+        'windows': None,
+        'dependencies': [],
+    },
+    'CENTER_INJURY_DIFF': {
+        'type': 'injury',
+        'description': 'Difference in center injury impact',
+        'windows': None,
+        'dependencies': ['HOME_CENTER_INJURIES', 'AWAY_CENTER_INJURIES'],
+    },
+    'HOME_MISSING_PLAYERS': {
+        'type': 'injury',
+        'description': 'Number of home team players missing',
+        'windows': None,
+        'dependencies': [],
+    },
+    'AWAY_MISSING_PLAYERS': {
+        'type': 'injury',
+        'description': 'Number of away team players missing',
+        'windows': None,
+        'dependencies': [],
+    },
+    'MISSING_PLAYERS_DIFF': {
+        'type': 'injury',
+        'description': 'Difference in missing players count',
+        'windows': None,
+        'dependencies': ['HOME_MISSING_PLAYERS', 'AWAY_MISSING_PLAYERS'],
+    },
+    'HOME_MISSING_STARTERS': {
+        'type': 'injury',
+        'description': 'Number of home team starters missing',
+        'windows': None,
+        'dependencies': [],
+    },
+    'AWAY_MISSING_STARTERS': {
+        'type': 'injury',
+        'description': 'Number of away team starters missing',
+        'windows': None,
+        'dependencies': [],
+    },
+    'MISSING_STARTERS_DIFF': {
+        'type': 'injury',
+        'description': 'Difference in missing starters count',
+        'windows': None,
+        'dependencies': ['HOME_MISSING_STARTERS', 'AWAY_MISSING_STARTERS'],
     },
     
     # Advanced contextual features

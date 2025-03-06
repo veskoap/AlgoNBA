@@ -604,7 +604,7 @@ class NBAFeatureProcessor:
         # Calculate head-to-head features
         h2h_stats = self.calculate_h2h_features(games)
 
-        # Get player availability features
+        # Get player availability and injury features
         try:
             # Get seasons from games dataframe
             seasons = pd.to_datetime(games['GAME_DATE_HOME']).dt.year.unique()
@@ -671,6 +671,35 @@ class NBAFeatureProcessor:
                 print(f"Successfully merged player data with {len(features)} features")
             else:
                 print("No player availability data found to merge")
+            
+            # Add injury data
+            print("Adding player injury features...")
+            
+            try:
+                # Import the injury tracker
+                from src.data.injury.injury_tracker import PlayerInjuryTracker
+                
+                # Initialize player impact scores dict
+                player_impact_scores = {}
+                
+                # Extract player impact scores from our features if possible
+                # This would be a more detailed implementation in production
+                injury_tracker = PlayerInjuryTracker()
+                
+                # Generate injury features directly from the tracker
+                injury_features = injury_tracker.generate_injury_features(
+                    games, player_impact_scores
+                )
+                
+                # If we have injury features, merge them into main features
+                if not injury_features.empty:
+                    print(f"Adding {len(injury_features.columns)} injury features")
+                    features = pd.concat([features, injury_features], axis=1)
+                
+            except Exception as e:
+                print(f"Error processing injury data: {e}")
+                import traceback
+                traceback.print_exc()
                 
         except Exception as e:
             print(f"Error loading player availability data: {e}")
