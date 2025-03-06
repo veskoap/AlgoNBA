@@ -109,6 +109,7 @@ def main():
     cache_dir = args.cache_dir
     
     # Check if running in Google Colab
+    is_colab = False
     try:
         import google.colab
         is_colab = True
@@ -116,22 +117,30 @@ def main():
         
         # Set up Drive integration if requested
         if args.colab_drive:
-            from google.colab import drive
-            if not os.path.exists('/content/drive'):
-                print("Mounting Google Drive for persistent storage...")
-                drive.mount('/content/drive')
-                
-            # Create AlgoNBA directories in Drive if they don't exist
-            os.makedirs('/content/drive/MyDrive/AlgoNBA/cache', exist_ok=True)
-            os.makedirs('/content/drive/MyDrive/AlgoNBA/models', exist_ok=True)
-            print("Google Drive mounted and AlgoNBA directories created")
-            
-            # Use Drive for cache unless explicitly specified
-            if cache_dir is None:
-                cache_dir = '/content/drive/MyDrive/AlgoNBA/cache'
-                print(f"Using Google Drive for cache storage: {cache_dir}")
+            try:
+                from google.colab import drive
+                if not os.path.exists('/content/drive'):
+                    print("Mounting Google Drive for persistent storage...")
+                    drive.mount('/content/drive')
+                    
+                # Double-check that Drive was mounted successfully
+                if os.path.exists('/content/drive/MyDrive'):
+                    # Create AlgoNBA directories in Drive if they don't exist
+                    os.makedirs('/content/drive/MyDrive/AlgoNBA/cache', exist_ok=True)
+                    os.makedirs('/content/drive/MyDrive/AlgoNBA/models', exist_ok=True)
+                    print("Google Drive mounted and AlgoNBA directories created")
+                    
+                    # Use Drive for cache unless explicitly specified
+                    if cache_dir is None:
+                        cache_dir = '/content/drive/MyDrive/AlgoNBA/cache'
+                        print(f"Using Google Drive for cache storage: {cache_dir}")
+                else:
+                    print("WARNING: Google Drive mount may have failed. Using session storage instead.")
+            except Exception as e:
+                print(f"WARNING: Error setting up Google Drive: {e}")
+                print("Continuing without Drive integration.")
     except ImportError:
-        is_colab = False
+        pass  # Not in Colab environment
     
     # Check if we're just performing a cache management action
     if args.cache_action:
@@ -208,7 +217,7 @@ def main():
                 # Determine save directory
                 if is_colab and args.colab_drive:
                     # Use Google Drive for persistence when in Colab
-                    save_dir = predictor.save_models("content/drive/MyDrive/AlgoNBA/models")
+                    save_dir = predictor.save_models("/content/drive/MyDrive/AlgoNBA/models")
                     print(f"Models saved to Google Drive: {save_dir}")
                 else:
                     # Use standard location

@@ -59,6 +59,8 @@ class EnhancedNBAPredictor:
         self.use_cache = use_cache
         self.cache_max_age_days = cache_max_age_days
         self.hardware_optimization = hardware_optimization
+        self.device = 'cpu'  # Default device
+        self.is_colab = False  # Default Colab detection
         
         # Initialize caching
         from src.utils.cache_manager import CacheManager
@@ -72,6 +74,48 @@ class EnhancedNBAPredictor:
         self.data_loader = NBADataLoader(use_cache=use_cache, cache_max_age_days=cache_max_age_days)
         self.feature_processor = NBAFeatureProcessor(self.lookback_windows)
         self.player_processor = PlayerAvailabilityProcessor()
+        
+        # Initialize appropriate models based on flag
+        if use_enhanced_models:
+            if self.quick_mode:
+                # Use simplified models for quick testing
+                self.ensemble_model = NBAEnhancedEnsembleModel(
+                    use_calibration=False, 
+                    use_stacking=False,
+                    n_folds=2  # Use fewer folds for faster testing
+                )
+                self.deep_model_trainer = EnhancedDeepModelTrainer(
+                    use_residual=False, 
+                    use_attention=False, 
+                    use_mc_dropout=False,
+                    epochs=5,  # Very few epochs for quick testing
+                    hidden_layers=[64, 32],  # Simplified architecture
+                    n_folds=2  # Fewer folds for faster testing
+                )
+                self.hybrid_model = HybridModel(
+                    ensemble_model=self.ensemble_model,
+                    deep_model=self.deep_model_trainer,
+                    quick_mode=True
+                )
+            else:
+                # Use full models
+                self.ensemble_model = NBAEnhancedEnsembleModel()
+                self.deep_model_trainer = EnhancedDeepModelTrainer()
+                self.hybrid_model = HybridModel()
+        else:
+            self.ensemble_model = NBAEnsembleModel()
+            self.deep_model_trainer = DeepModelTrainer()
+            self.hybrid_model = None
+            
+        # Storage for models and data
+        self.games = None
+        self.advanced_metrics = None
+        self.stats_df = None
+        self.features = None
+        self.targets = None
+        
+        # Create a unique cache key for this predictor configuration
+        self.config_hash = self._generate_config_hash()
         
     def _configure_hardware_optimizations(self):
         """Configure optimizations for the current hardware platform."""
@@ -145,10 +189,6 @@ class EnhancedNBAPredictor:
             
         except ImportError:
             self.is_colab = False
-        
-        # Initialize appropriate models based on flag
-        if use_enhanced_models:
-            if self.quick_mode:
                 # Use simplified models for quick testing
                 self.ensemble_model = NBAEnhancedEnsembleModel(
                     use_calibration=False, 
