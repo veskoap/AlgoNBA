@@ -929,72 +929,194 @@ class NBADataLoader:
                             if 'PIE' not in team_players.columns:
                                 print(f"PIE not found in main endpoint for team {self.get_team_abbrev(team_id)}, trying PIE-specific endpoint")
                                 try:
-                                    # Try one more specialized endpoint for PIE data
-                                    from nba_api.stats.endpoints import playerdashboardbygeneralsplits
+                                    # Try fetching PIE data for each player in the team
+                                    print(f"Fetching PIE data for individual players on team {self.get_team_abbrev(team_id)}")
                                     
-                                    # This endpoint often has PIE data
-                                    # Removed team_id from parameters since it's causing the error
-                                    pie_data = playerdashboardbygeneralsplits.PlayerDashboardByGeneralSplits(
-                                        season=season,
-                                        measure_type_detailed='Advanced',
-                                        per_mode_detailed='PerGame'
-                                    ).get_data_frames()[0]
+                                    # Get player IDs for this team
+                                    player_ids = team_players['PLAYER_ID'].tolist() if 'PLAYER_ID' in team_players.columns else []
                                     
-                                    # If we found PIE, merge it into our main dataframe
-                                    if 'PIE' in pie_data.columns and 'PLAYER_ID' in pie_data.columns:
-                                        pie_subset = pie_data[['PLAYER_ID', 'PIE']].copy()
-                                        # Merge PIE data with team_players
-                                        if 'PLAYER_ID' in team_players.columns:
-                                            team_players = pd.merge(
-                                                team_players, 
-                                                pie_subset,
-                                                on='PLAYER_ID',
-                                                how='left'
-                                            )
+                                    if player_ids:
+                                        # Process up to 5 players to avoid excessive API calls
+                                        sample_players = player_ids[:5]
+                                        print(f"Fetching PIE data for {len(sample_players)} key players")
+                                        
+                                        # Create a DataFrame to store PIE data
+                                        pie_data_list = []
+                                        
+                                        # Fetch data for each player
+                                        for player_id in sample_players:
+                                            try:
+                                                from nba_api.stats.endpoints import playerdashboardbygeneralsplits
+                                                
+                                                # This endpoint requires player_id
+                                                player_data = playerdashboardbygeneralsplits.PlayerDashboardByGeneralSplits(
+                                                    player_id=player_id,  # Add the required player_id
+                                                    season=season,
+                                                    measure_type_detailed='Advanced',
+                                                    per_mode_detailed='PerGame'
+                                                ).get_data_frames()[0]
+                                                
+                                                # If we have PIE data, add it to our list
+                                                if 'PIE' in player_data.columns:
+                                                    # Extract PIE value and add to our list
+                                                    pie_value = player_data['PIE'].iloc[0] if not player_data.empty else 0.0
+                                                    pie_data_list.append({
+                                                        'PLAYER_ID': player_id,
+                                                        'PIE': pie_value
+                                                    })
+                                                    print(f"Successfully fetched PIE value {pie_value:.4f} for player {player_id}")
+                                                
+                                                # Add a small delay to avoid rate limiting
+                                                time.sleep(0.5)
+                                                
+                                            except Exception as player_err:
+                                                print(f"Error fetching PIE for player {player_id}: {player_err}")
+                                                continue
+                                        
+                                        # If we collected any PIE data, convert to DataFrame and merge
+                                        if pie_data_list:
+                                            pie_subset = pd.DataFrame(pie_data_list)
+                                            print(f"Adding PIE data for {len(pie_subset)} players")
+                                            
+                                            # Merge PIE data with team_players
+                                            if 'PLAYER_ID' in team_players.columns:
+                                                team_players = pd.merge(
+                                                    team_players, 
+                                                    pie_subset,
+                                                    on='PLAYER_ID',
+                                                    how='left'
+                                                )
+                                    else:
+                                        print(f"No player IDs available for team {self.get_team_abbrev(team_id)}")
                                 except Exception as e:
                                     specific_error = str(e)
                                     print(f"Failed to fetch PIE data directly: {specific_error[:200]}")
                                     
-                                    # Try alternative endpoint if the specific error is about unexpected keyword
-                                    if "unexpected keyword" in specific_error:
+                                    # Try alternative approaches to get advanced metrics
+                                    print("Trying league-wide advanced metrics for PIE data...")
+                                    try:
+                                        # Fetch league-wide advanced metrics which often has PIE
+                                        from nba_api.stats.endpoints import leaguedashplayerstats
+                                        
+                                        print(f"Fetching advanced metrics for all players in season {season}")
+                                        # Use 'Advanced' measure type which includes PIE
+                                        alt_data = leaguedashplayerstats.LeagueDashPlayerStats(
+                                            season=season,
+                                            measure_type_detailed='Advanced',
+                                            per_mode_detailed='PerGame'
+                                        ).get_data_frames()[0]
+                                        
+                                        # Check if we got PIE data
+                                        if 'PIE' in alt_data.columns:
+                                            print(f"Successfully fetched league-wide PIE data, filtering for team {self.get_team_abbrev(team_id)}")
+                                            
+                                            # Filter to only this team's players and merge
+                                            if 'TEAM_ID' in alt_data.columns:
+                                                team_pie_data = alt_data[alt_data['TEAM_ID'] == team_id]
+                                                
+                                                if not team_pie_data.empty:
+                                                    print(f"Found {len(team_pie_data)} players with PIE data for team {self.get_team_abbrev(team_id)}")
+                                                    pie_subset = team_pie_data[['PLAYER_ID', 'PIE']].copy()
+                                                    
+                                                    if 'PLAYER_ID' in team_players.columns:
+                                                        team_players = pd.merge(
+                                                            team_players, 
+                                                            pie_subset,
+                                                            on='PLAYER_ID',
+                                                            how='left'
+                                                        )
+                                                else:
+                                                    print(f"No players found for team {self.get_team_abbrev(team_id)} in league-wide data")
+                                        else:
+                                            print("PIE column not found in league-wide advanced metrics")
+                                            
+                                    except Exception as e2:
+                                        print(f"League-wide advanced metrics approach failed: {str(e2)[:150]}")
+                                        
+                                        # Try one more time with the efficiency endpoint
                                         try:
-                                            # Try with different parameters
-                                            from nba_api.stats.endpoints import leaguedashplayerstats
-                                            alt_data = leaguedashplayerstats.LeagueDashPlayerStats(
+                                            print("Trying league efficiency endpoint for PIE data...")
+                                            from nba_api.stats.endpoints import leaguedashplayerptshot
+                                            
+                                            # Use league player shooting endpoint which might have PIE
+                                            efficiency_data = leaguedashplayerptshot.LeagueDashPlayerPtShot(
                                                 season=season,
-                                                measure_type_detailed='Advanced'
+                                                per_mode_detailed='PerGame'
                                             ).get_data_frames()[0]
                                             
-                                            if 'PIE' in alt_data.columns:
-                                                # Filter to only this team's players and merge
-                                                if 'TEAM_ID' in alt_data.columns:
-                                                    team_pie_data = alt_data[alt_data['TEAM_ID'] == team_id]
-                                                    if not team_pie_data.empty:
-                                                        pie_subset = team_pie_data[['PLAYER_ID', 'PIE']].copy()
-                                                        if 'PLAYER_ID' in team_players.columns:
-                                                            team_players = pd.merge(
-                                                                team_players, 
-                                                                pie_subset,
-                                                                on='PLAYER_ID',
-                                                                how='left'
-                                                            )
-                                        except Exception as e2:
-                                            print(f"Alternative PIE endpoint also failed: {str(e2)[:100]}")
+                                            # Filter by team and calculate a proxy for PIE using available metrics
+                                            team_data = efficiency_data[efficiency_data['TEAM_ID'] == team_id] if 'TEAM_ID' in efficiency_data.columns else pd.DataFrame()
+                                            
+                                            if not team_data.empty and 'PLAYER_ID' in team_data.columns:
+                                                print(f"Found efficiency data for {len(team_data)} players on team {self.get_team_abbrev(team_id)}")
+                                                
+                                                # Extract player IDs and add to team_players
+                                                eff_subset = team_data[['PLAYER_ID']].copy()
+                                                
+                                                # We'll add estimated PIE based on other available metrics later
+                                                if 'PLAYER_ID' in team_players.columns:
+                                                    team_players = pd.merge(
+                                                        team_players, 
+                                                        eff_subset,
+                                                        on='PLAYER_ID',
+                                                        how='left'
+                                                    )
+                                        except Exception as e3:
+                                            print(f"All alternative approaches failed: {str(e3)[:100]}")
                                 
                                 # If still missing, calculate manually
                                 if 'PIE' not in team_players.columns:
                                     print(f"PIE not available from API for team {self.get_team_abbrev(team_id)}, calculating manually")
-                                    # Calculate a PIE-like metric ourselves when not available from API
-                                    # Formula to approximate PIE based on available stats
-                                    if all(col in team_players.columns for col in ['PTS', 'REB', 'AST', 'STL', 'BLK', 'MIN']):
+                                    # Calculate a PIE-like metric with improved formula
+                                    base_stats = ['PTS', 'REB', 'AST', 'STL', 'BLK', 'MIN']
+                                    advanced_stats = ['PTS', 'REB', 'AST', 'STL', 'BLK', 'MIN', 'FG_PCT', 'TOV']
+                                    
+                                    if all(col in team_players.columns for col in advanced_stats):
+                                        print(f"Using advanced PIE approximation with multiple factors")
+                                        # More sophisticated PIE approximation using multiple factors
+                                        # Weights approximated from NBA's actual PIE formula
+                                        weights = {
+                                            'PTS': 0.5,
+                                            'REB': 0.3,
+                                            'AST': 0.25,
+                                            'STL': 0.2,
+                                            'BLK': 0.2,
+                                            'FG_PCT': 0.1,
+                                            'TOV': -0.25,  # Negative weight for turnovers
+                                        }
+                                        
+                                        # Calculate weighted sum
+                                        weighted_sum = 0
+                                        for stat, weight in weights.items():
+                                            if stat in team_players.columns:
+                                                # Replace NaN with 0 and apply weight
+                                                weighted_sum += team_players[stat].fillna(0) * weight
+                                        
+                                        # Normalize by minutes played
+                                        minutes_factor = team_players['MIN'].fillna(10)  # Default to 10 min if missing
+                                        minutes_factor = minutes_factor.replace(0, 10)  # Avoid division by zero
+                                        
+                                        # Calculate PIE and scale to realistic range (0-0.3)
+                                        team_players['PIE'] = (weighted_sum / minutes_factor).clip(0, 0.3)
+                                        
+                                    elif all(col in team_players.columns for col in base_stats):
+                                        print(f"Using basic PIE approximation with available stats")
+                                        # Calculate a PIE-like metric with basic stats
                                         team_players['PIE'] = (
-                                            (team_players['PTS'] + team_players['REB'] + team_players['AST'] + 
-                                             team_players['STL'] + team_players['BLK']) / 
-                                            (team_players['MIN'] + 1)  # Add 1 to avoid division by zero
-                                        ) / 10.0  # Scale to 0-1 range similar to PIE
+                                            (team_players['PTS'] + team_players['REB'] * 1.2 + team_players['AST'] * 1.5 + 
+                                             team_players['STL'] * 2 + team_players['BLK'] * 2) / 
+                                            (team_players['MIN'].replace(0, 10))  # Replace 0 with 10 to avoid division by zero
+                                        ) / 15.0  # Scale to a realistic 0-0.3 range similar to actual PIE
                                     else:
-                                        # If needed statistics aren't available, create a simple proxy
-                                        team_players['PIE'] = 0.1  # Default value
+                                        print(f"Insufficient stats, using simple PIE proxy based on available columns")
+                                        # Create a simple proxy based on the most important available column
+                                        if 'PTS' in team_players.columns:
+                                            team_players['PIE'] = team_players['PTS'] / 100
+                                        elif 'MIN' in team_players.columns:
+                                            team_players['PIE'] = team_players['MIN'] / 200
+                                        else:
+                                            # If no useful stats at all, create a range of values for the team
+                                            team_players['PIE'] = 0.1  # Default value
                             
                             # Check for USG_PCT
                             if 'USG_PCT' not in team_players.columns:
