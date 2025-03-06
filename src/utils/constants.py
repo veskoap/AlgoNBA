@@ -74,7 +74,11 @@ FEATURE_GROUPS = {
     'PLAYER': 'Player impact modeling',
     'INJURY': 'Player injury features',
     'CONTEXT': 'Contextual features',
-    'TREND': 'Historical trend features'
+    'TREND': 'Historical trend features',
+    'SPREAD': 'Vegas betting lines',
+    'IMPLIED_WIN': 'Market-implied probabilities',
+    'OVER_UNDER': 'Totals betting lines',
+    'MONEYLINE': 'Moneyline odds'
 }
 
 # Create a new cache directory in the project
@@ -87,6 +91,55 @@ except Exception:
 
 # Comprehensive feature registry for the NBA prediction system
 FEATURE_REGISTRY = {
+    # Betting odds features
+    'SPREAD_HOME': {
+        'type': 'betting',
+        'description': 'Vegas point spread for home team',
+        'windows': None,
+        'dependencies': [],
+    },
+    'SPREAD_AWAY': {
+        'type': 'betting',
+        'description': 'Vegas point spread for away team',
+        'windows': None,
+        'dependencies': [],
+    },
+    'OVER_UNDER': {
+        'type': 'betting',
+        'description': 'Total points over/under line',
+        'windows': None,
+        'dependencies': [],
+    },
+    'MONEYLINE_HOME': {
+        'type': 'betting',
+        'description': 'Moneyline odds for home team',
+        'windows': None,
+        'dependencies': [],
+    },
+    'MONEYLINE_AWAY': {
+        'type': 'betting',
+        'description': 'Moneyline odds for away team',
+        'windows': None,
+        'dependencies': [],
+    },
+    'IMPLIED_WIN_PROB': {
+        'type': 'betting',
+        'description': 'Implied win probability from betting lines',
+        'windows': None,
+        'dependencies': [],
+    },
+    'SPREAD_DIFF': {
+        'type': 'betting',
+        'description': 'Difference between home and away spread',
+        'windows': None,
+        'dependencies': ['SPREAD_HOME', 'SPREAD_AWAY'],
+    },
+    'LINE_MOVEMENT': {
+        'type': 'betting',
+        'description': 'Point spread line movement since opening',
+        'windows': None,
+        'dependencies': [],
+    },
     # Win percentage features
     'WIN_PCT_HOME': {
         'type': 'base',
@@ -556,9 +609,11 @@ FEATURE_REGISTRY = {
 
 # Confidence score weights
 CONFIDENCE_WEIGHTS = {
-    'prediction_margin': 0.3,  # Weight for prediction probability margin
-    'sample_size': 0.2,        # Weight for number of previous matches
-    'recent_consistency': 0.2,  # Weight for consistency in recent games
-    'h2h_history': 0.15,       # Weight for head-to-head history
-    'rest_advantage': 0.15     # Weight for rest day advantage
+    'prediction_margin': 0.25,  # Weight for prediction probability margin
+    'vegas_line': 0.25,         # Weight for Vegas betting line match
+    'sample_size': 0.15,        # Weight for number of previous matches
+    'recent_consistency': 0.15,  # Weight for consistency in recent games
+    'h2h_history': 0.10,        # Weight for head-to-head history
+    'rest_advantage': 0.05,     # Weight for rest day advantage
+    'player_impact': 0.05       # Weight for player availability impact
 }

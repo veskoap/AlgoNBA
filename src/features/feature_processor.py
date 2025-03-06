@@ -566,6 +566,11 @@ class NBAFeatureProcessor:
         """
         print("Calculating advanced team statistics...")
         
+        # Check for betting odds columns and use them if available
+        self.has_betting_odds = all(col in games.columns for col in [
+            'SPREAD_HOME', 'OVER_UNDER', 'IMPLIED_WIN_PROB'
+        ])
+        
         # Check if the DataFrame is empty or has very little data
         if games.empty or len(games) == 0:
             print("Warning: Empty game data provided. Creating minimal feature set for compatibility.")
@@ -650,6 +655,21 @@ class NBAFeatureProcessor:
         
         # Add rivalry matchup flag (placeholder - would need predefined rivalry pairs)
         features['RIVALRY_MATCHUP'] = 0
+        
+        # Add betting odds data if available
+        if hasattr(self, 'has_betting_odds') and self.has_betting_odds:
+            features['SPREAD_HOME'] = games['SPREAD_HOME']
+            features['SPREAD_AWAY'] = games['SPREAD_AWAY']
+            features['OVER_UNDER'] = games['OVER_UNDER']
+            features['MONEYLINE_HOME'] = games['MONEYLINE_HOME']
+            features['MONEYLINE_AWAY'] = games['MONEYLINE_AWAY']
+            features['IMPLIED_WIN_PROB'] = games['IMPLIED_WIN_PROB']
+            
+            # Calculate derived betting features
+            features['SPREAD_DIFF'] = features['SPREAD_HOME'] - features['SPREAD_AWAY']
+            features['LINE_MOVEMENT'] = 0  # Placeholder for now
+            
+            print("Added betting odds features for enhanced prediction")
 
         # Ensure proper sorting of features DataFrame
         features = features.sort_values(['GAME_DATE', 'TEAM_ID_HOME', 'TEAM_ID_AWAY'])
@@ -1504,6 +1524,11 @@ class NBAFeatureProcessor:
         for prefix, description in FEATURE_GROUPS.items():
             related_features = [col for col in feature_cols if prefix in col]
             print(f"{description}: {len(related_features)} features")
+            
+        # Add betting odds features to feature count if available
+        betting_features = [col for col in feature_cols if any(term in col for term in ['SPREAD', 'MONEYLINE', 'IMPLIED_WIN', 'OVER_UNDER'])]
+        if betting_features:
+            print(f"Betting odds features: {len(betting_features)} features")
         
         # Remove any non-numeric columns that would cause issues with XGBoost
         # Specifically exclude object columns and datetime columns with error handling

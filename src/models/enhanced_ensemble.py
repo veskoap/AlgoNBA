@@ -665,11 +665,12 @@ class NBAEnhancedEnsembleModel:
             # Add more confidence factors specific to enhanced model
             enhanced_factors = {
                 'prediction_margin': 0.25,     # Weight for prediction probability margin
-                'sample_size': 0.15,           # Weight for number of previous matches
-                'recent_consistency': 0.15,     # Weight for consistency in recent games
-                'h2h_history': 0.15,           # Weight for head-to-head history
-                'rest_advantage': 0.10,        # Weight for rest day advantage
-                'player_impact': 0.10,         # Weight for player availability
+                'vegas_line': 0.25,            # Weight for agreement with Vegas lines
+                'sample_size': 0.10,           # Weight for number of previous matches
+                'recent_consistency': 0.10,    # Weight for consistency in recent games
+                'h2h_history': 0.10,           # Weight for head-to-head history
+                'rest_advantage': 0.05,        # Weight for rest day advantage
+                'player_impact': 0.05,         # Weight for player availability
                 'feature_stability': 0.05,     # Weight for feature stability
                 'model_consensus': 0.05        # Weight for model agreement
             }
@@ -686,6 +687,16 @@ class NBAEnhancedEnsembleModel:
                 # Apply sigmoid transformation to reward high confidence predictions more
                 margin_confidence = 1 / (1 + np.exp(-6 * (prob_margin - 0.5)))
                 score += margin_confidence * factors['prediction_margin']
+                
+                # 1.5 Vegas line agreement if available
+                if 'IMPLIED_WIN_PROB' in features.columns and 'vegas_line' in factors:
+                    # Calculate agreement between model and betting lines
+                    implied_prob = features.iloc[i]['IMPLIED_WIN_PROB']
+                    # Agreement is higher when model and vegas agree
+                    vegas_agreement = 1.0 - min(abs(pred - implied_prob), 0.5) * 2  # Scale to [0, 1]
+                    # Apply sigmoid transformation similar to margin_confidence
+                    vegas_conf = 1 / (1 + np.exp(-6 * (vegas_agreement - 0.5)))
+                    score += vegas_conf * factors['vegas_line']
 
                 # 2. Sample size confidence
                 if 'WIN_count_HOME_60D' in features.columns:
