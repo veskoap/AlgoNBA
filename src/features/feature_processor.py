@@ -604,6 +604,79 @@ class NBAFeatureProcessor:
         # Calculate head-to-head features
         h2h_stats = self.calculate_h2h_features(games)
 
+        # Get player availability features
+        try:
+            # Get seasons from games dataframe
+            seasons = pd.to_datetime(games['GAME_DATE_HOME']).dt.year.unique()
+            formatted_seasons = [f"{year}-{str(year+1)[-2:]}" for year in seasons]
+            
+            print(f"Getting player availability for season(s): {formatted_seasons}")
+            
+            # Create data loader instance to get player data
+            from src.data.data_loader import NBADataLoader
+            data_loader = NBADataLoader()
+            
+            player_avail_data = None
+            
+            # For each detected season, get player availability data
+            for season in formatted_seasons:
+                season_avail = data_loader.fetch_player_availability(season)
+                
+                if not season_avail.empty:
+                    print(f"Successfully loaded player data for {season} with {len(season_avail)} records")
+                    
+                    if player_avail_data is None:
+                        player_avail_data = season_avail
+                    else:
+                        player_avail_data = pd.concat([player_avail_data, season_avail], ignore_index=True)
+            
+            # If we have player data, merge it with features
+            if player_avail_data is not None and not player_avail_data.empty:
+                print(f"Merging {len(player_avail_data)} player availability records with features")
+                
+                # Split into home and away data
+                home_player_data = player_avail_data[player_avail_data['IS_HOME'] == 1].copy()
+                away_player_data = player_avail_data[player_avail_data['IS_HOME'] == 0].copy()
+                
+                # Rename columns for merging
+                home_cols = {col: f"{col}_HOME" for col in home_player_data.columns 
+                             if col not in ['GAME_ID', 'TEAM_ID', 'IS_HOME']}
+                away_cols = {col: f"{col}_AWAY" for col in away_player_data.columns
+                             if col not in ['GAME_ID', 'TEAM_ID', 'IS_HOME']}
+                
+                home_player_data = home_player_data.rename(columns=home_cols)
+                away_player_data = away_player_data.rename(columns=away_cols)
+                
+                # Merge with features
+                features = pd.merge(
+                    features,
+                    home_player_data,
+                    left_on=['GAME_ID_HOME', 'TEAM_ID_HOME'],
+                    right_on=['GAME_ID', 'TEAM_ID'],
+                    how='left'
+                )
+                
+                features = pd.merge(
+                    features,
+                    away_player_data,
+                    left_on=['GAME_ID_HOME', 'TEAM_ID_AWAY'],
+                    right_on=['GAME_ID', 'TEAM_ID'],
+                    how='left'
+                )
+                
+                # Drop duplicate columns
+                drop_cols = [col for col in features.columns if col in ['GAME_ID', 'TEAM_ID', 'IS_HOME']]
+                features = features.drop(columns=drop_cols, errors='ignore')
+                
+                print(f"Successfully merged player data with {len(features)} features")
+            else:
+                print("No player availability data found to merge")
+                
+        except Exception as e:
+            print(f"Error loading player availability data: {e}")
+            import traceback
+            traceback.print_exc()
+
         # Sort both DataFrames before merging
         features = features.sort_values(['TEAM_ID_HOME', 'TEAM_ID_AWAY', 'GAME_DATE'])
         h2h_stats = h2h_stats.sort_values(['TEAM_ID_HOME', 'TEAM_ID_AWAY', 'GAME_DATE'])

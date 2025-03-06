@@ -76,6 +76,14 @@ FEATURE_GROUPS = {
     'TREND': 'Historical trend features'
 }
 
+# Create a new cache directory in the project
+import os
+try:
+    cache_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'cache')
+    os.makedirs(cache_dir, exist_ok=True)
+except Exception:
+    pass
+
 # Comprehensive feature registry for the NBA prediction system
 FEATURE_REGISTRY = {
     # Win percentage features
@@ -346,6 +354,60 @@ FEATURE_REGISTRY = {
         'description': 'Difference in lineup impact scores',
         'windows': None,
         'dependencies': ['LINEUP_IMPACT_HOME', 'LINEUP_IMPACT_AWAY'],
+    },
+    'GUARD_STRENGTH_HOME': {
+        'type': 'player',
+        'description': 'Home team guard strength',
+        'windows': None,
+        'dependencies': [],
+    },
+    'GUARD_STRENGTH_AWAY': {
+        'type': 'player',
+        'description': 'Away team guard strength',
+        'windows': None,
+        'dependencies': [],
+    },
+    'FORWARD_STRENGTH_HOME': {
+        'type': 'player',
+        'description': 'Home team forward strength',
+        'windows': None,
+        'dependencies': [],
+    },
+    'FORWARD_STRENGTH_AWAY': {
+        'type': 'player',
+        'description': 'Away team forward strength',
+        'windows': None,
+        'dependencies': [],
+    },
+    'CENTER_STRENGTH_HOME': {
+        'type': 'player',
+        'description': 'Home team center strength',
+        'windows': None,
+        'dependencies': [],
+    },
+    'CENTER_STRENGTH_AWAY': {
+        'type': 'player',
+        'description': 'Away team center strength',
+        'windows': None,
+        'dependencies': [],
+    },
+    'GUARD_ADVANTAGE': {
+        'type': 'player',
+        'description': 'Home team guard advantage',
+        'windows': None,
+        'dependencies': ['GUARD_STRENGTH_HOME', 'GUARD_STRENGTH_AWAY'],
+    },
+    'FORWARD_ADVANTAGE': {
+        'type': 'player',
+        'description': 'Home team forward advantage',
+        'windows': None,
+        'dependencies': ['FORWARD_STRENGTH_HOME', 'FORWARD_STRENGTH_AWAY'],
+    },
+    'CENTER_ADVANTAGE': {
+        'type': 'player',
+        'description': 'Home team center advantage',
+        'windows': None,
+        'dependencies': ['CENTER_STRENGTH_HOME', 'CENTER_STRENGTH_AWAY'],
     },
     
     # Advanced contextual features
