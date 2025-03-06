@@ -5,9 +5,8 @@ import pandas as pd
 import numpy as np
 from sklearn.preprocessing import StandardScaler
 import warnings
-from sklearn import __version__ as sklearn_version
-# Handle deprecated parameters based on sklearn version
-SKLEARN_PARAM = "ensure_all_finite" if float(sklearn_version.split('.')[0]) >= 1 else "force_all_finite"
+# Suppress the future warning
+warnings.filterwarnings("ignore", category=FutureWarning, module="sklearn.utils.validation")
 
 
 class EnhancedScaler:
@@ -57,9 +56,8 @@ class EnhancedScaler:
         
         # Try StandardScaler if data is clean
         try:
-            # Use the correct parameter name based on sklearn version
-            kwargs = {SKLEARN_PARAM: False}
-            result = self.scaler.fit_transform(X_preprocessed, **kwargs)
+            # Don't pass the parameter that's causing issues
+            result = self.scaler.fit_transform(X_preprocessed)
             return result
         except Exception as e:
             print(f"Warning: StandardScaler failed: {e}. Using robust fallback scaling.")
@@ -105,9 +103,8 @@ class EnhancedScaler:
         
         # Try StandardScaler if data is clean
         try:
-            # Use the correct parameter name based on sklearn version
-            kwargs = {SKLEARN_PARAM: False}
-            result = self.scaler.transform(X_preprocessed, **kwargs)
+            # Don't pass the parameter that's causing issues
+            result = self.scaler.transform(X_preprocessed)
             return result
         except Exception as e:
             print(f"Warning: StandardScaler transform failed: {e}. Using robust fallback scaling.")

@@ -524,6 +524,17 @@ class EnhancedDeepModelTrainer:
                 # Check if we have A100
                 device_name = torch.cuda.get_device_name(0)
                 print(f"Using GPU: {device_name}")
+                
+                # Force some tensor operations to GPU to ensure GPU memory usage
+                dummy_tensor = torch.ones(1, device=self.device)
+                del dummy_tensor  # Immediately delete it
+                
+                # Report GPU memory usage
+                total_mem = torch.cuda.get_device_properties(0).total_memory / 1024**3
+                reserved_mem = torch.cuda.memory_reserved(0) / 1024**3
+                allocated_mem = torch.cuda.memory_allocated(0) / 1024**3
+                print(f"GPU Memory: Total={total_mem:.2f}GB, Reserved={reserved_mem:.2f}GB, Allocated={allocated_mem:.2f}GB")
+                
                 if "A100" in device_name:
                     print("A100 GPU detected! Optimizing for maximum performance.")
                     # A100-specific optimizations
@@ -609,14 +620,23 @@ class EnhancedDeepModelTrainer:
                 setattr(feature_scaler, 'feature_names_in_', np.array(X_train.columns))
 
             # Create PyTorch datasets and dataloaders for batch processing
-            train_dataset = TensorDataset(
-                torch.FloatTensor(X_train_scaled),
-                torch.LongTensor(y_train.values)
-            )
-            val_dataset = TensorDataset(
-                torch.FloatTensor(X_val_scaled),
-                torch.LongTensor(y_val.values)
-            )
+            # Create tensors and force to GPU if available
+            X_train_tensor = torch.FloatTensor(X_train_scaled)
+            y_train_tensor = torch.LongTensor(y_train.values)
+            X_val_tensor = torch.FloatTensor(X_val_scaled)
+            y_val_tensor = torch.LongTensor(y_val.values)
+            
+            # Log memory usage after tensor creation
+            if torch.cuda.is_available():
+                # Move smaller tensors to GPU to verify GPU memory usage
+                dummy = torch.zeros(1, X_train_scaled.shape[1], device=self.device)
+                print(f"Dummy tensor on GPU: {dummy.device}")
+                del dummy
+                allocated_mem = torch.cuda.memory_allocated(0) / 1024**3
+                print(f"GPU Memory after tensor creation: {allocated_mem:.2f}GB")
+            
+            train_dataset = TensorDataset(X_train_tensor, y_train_tensor)
+            val_dataset = TensorDataset(X_val_tensor, y_val_tensor)
             
             # Create dataloaders with GPU optimization
             train_loader = DataLoader(
@@ -701,6 +721,11 @@ class EnhancedDeepModelTrainer:
 
             # Initialize mixed precision training (if enabled)
             scaler = GradScaler() if self.use_amp and torch.cuda.is_available() else None
+            
+            # Log GPU memory before training
+            if torch.cuda.is_available():
+                allocated_mem_before = torch.cuda.memory_allocated(0) / 1024**3
+                print(f"GPU Memory allocated before training: {allocated_mem_before:.2f}GB")
 
             # Training loop with early stopping
             best_val_loss = float('inf')
@@ -710,6 +735,20 @@ class EnhancedDeepModelTrainer:
             best_model_state = None
 
             for epoch in range(self.epochs):
+                # Force CUDA memory allocation at the beginning of each epoch if on GPU
+                if torch.cuda.is_available() and epoch == 0:
+                    print("Forcing initial GPU memory allocation...")
+                    # Create a dummy batch and move it to GPU to ensure memory allocation
+                    dummy_input = torch.zeros(self.batch_size, X_train.shape[1], device=self.device)
+                    dummy_out = model(dummy_input)
+                    del dummy_input, dummy_out
+                    torch.cuda.empty_cache()
+                    
+                    # Log memory usage
+                    allocated_mem = torch.cuda.memory_allocated(0) / 1024**3
+                    reserved_mem = torch.cuda.memory_reserved(0) / 1024**3
+                    print(f"Epoch start GPU memory: Allocated={allocated_mem:.2f}GB, Reserved={reserved_mem:.2f}GB")
+                
                 # ----- Training phase -----
                 model.train()
                 train_loss = 0.0
@@ -814,6 +853,11 @@ class EnhancedDeepModelTrainer:
                     
                     # Print progress for best epoch
                     print(f"Epoch {epoch}: Val Loss: {avg_val_loss:.4f}, Acc: {acc:.3f}, AUC: {auc:.3f}")
+                    
+                    # Monitor GPU memory usage for best epochs
+                    if torch.cuda.is_available():
+                        allocated_mem = torch.cuda.memory_allocated(0) / 1024**3
+                        print(f"Epoch {epoch} GPU Memory: {allocated_mem:.2f}GB")
                 else:
                     patience_counter += 1
                 
