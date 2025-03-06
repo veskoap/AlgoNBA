@@ -1219,8 +1219,9 @@ class NBAFeatureProcessor:
                 features = pd.concat([features, pd.DataFrame({'TARGET': target_value}, index=features.index)], axis=1)
             
             # Remove any non-numeric columns that would cause issues with machine learning models
+            # Preserve GAME_DATE for reference, even though it's not used in the model
             non_numeric_cols = [col for col in features.columns 
-                              if col != 'TARGET' and features[col].dtype not in [np.float64, np.int64, bool, 'float32', 'int32']]
+                              if col != 'TARGET' and col != 'GAME_DATE' and features[col].dtype not in [np.float64, np.int64, bool, 'float32', 'int32']]
             
             if non_numeric_cols:
                 print(f"Removing {len(non_numeric_cols)} non-numeric columns for ML compatibility: {non_numeric_cols[:5]}...")

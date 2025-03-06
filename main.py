@@ -8,6 +8,7 @@ allowing users to train models and generate predictions with various options:
 - Season selection: Choose which NBA seasons to use for training
 - Quick mode: Faster execution for testing and development
 - Save/load models: Save trained models to disk and load them for later use
+- Cache system: Speed up subsequent runs by caching data, features, and model results
 
 Example usage:
     # Train with enhanced models (default)
@@ -27,6 +28,18 @@ Example usage:
     
     # Load previously saved models
     python main.py --load-models saved_models/nba_model_20230401_120000
+    
+    # Disable the cache system to always fetch fresh data
+    python main.py --no-cache
+    
+    # View cache statistics
+    python main.py --cache-action status
+    
+    # Clear a specific cache type (games, features, models, predictions)
+    python main.py --cache-action clear_type --cache-type features
+    
+    # Clear all cache entries
+    python main.py --cache-action clear_all
 """
 import sys
 import pandas as pd
@@ -66,24 +79,63 @@ def main():
     parser.add_argument('--load-models', metavar='MODEL_DIR', type=str,
                       help='Load previously saved models from specified directory instead of '
                            'training new ones. Example: --load-models saved_models/nba_model_20230401_120000')
+    parser.add_argument('--no-cache', action='store_true',
+                      help='Disable the cache system. By default, the system caches data, features, '
+                           'and predictions to speed up subsequent runs. Use this flag to always '
+                           'fetch and process fresh data.')
+    parser.add_argument('--cache-action', choices=['status', 'clear_type', 'clear_all'],
+                      help='Perform cache management actions: get cache status, clear specific '
+                           'cache type, or clear all cache.')
+    parser.add_argument('--cache-type', choices=['games', 'features', 'models', 'predictions'],
+                      help='Specify cache type for cache-action')
     args = parser.parse_args()
     
     # Use enhanced models by default unless --standard flag is provided
     use_enhanced = not args.standard
     model_type = "enhanced" if use_enhanced else "standard"
     
+    # Determine whether to use cache
+    use_cache = not args.no_cache
+    cache_status = "disabled" if args.no_cache else "enabled"
+    
+    # Check if we're just performing a cache management action
+    if args.cache_action:
+        # Create a temporary predictor just for cache management
+        temp_predictor = EnhancedNBAPredictor(
+            seasons=args.seasons,
+            use_enhanced_models=use_enhanced,
+            quick_mode=args.quick,
+            use_cache=True  # Must be enabled for cache management
+        )
+        
+        # Perform the requested cache action
+        result = temp_predictor.manage_cache(args.cache_action, args.cache_type)
+        print(f"Cache {args.cache_action} result: {result['status']}")
+        if 'statistics' in result:
+            stats = result['statistics']
+            print(f"Cache entries: {stats['total_entries']}")
+            print(f"Cache size: {stats['total_size_mb']:.2f} MB")
+            print("Cache types:")
+            for cache_type, count in stats['by_type'].items():
+                print(f"  - {cache_type}: {count} entries")
+        
+        # Exit after performing cache action
+        return
+    
     # Check if we're loading pre-trained models
     if args.load_models:
         print(f"Loading pre-trained models from {args.load_models}...")
-        predictor = EnhancedNBAPredictor.load_models(args.load_models)
-        print("Models loaded successfully!")
+        predictor = EnhancedNBAPredictor.load_models(args.load_models, use_cache=use_cache)
+        print(f"Models loaded successfully! Cache {cache_status}.")
     else:
         # Initialize a new predictor with specified settings
         print(f"Starting NBA prediction system with {model_type} models...")
+        print(f"Cache system {cache_status}.")
         predictor = EnhancedNBAPredictor(
             seasons=args.seasons,
             use_enhanced_models=use_enhanced,
-            quick_mode=args.quick
+            quick_mode=args.quick,
+            use_cache=use_cache
         )
     
     try:

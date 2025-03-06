@@ -24,7 +24,8 @@ class EnhancedNBAPredictor:
     """Main class for NBA prediction system."""
     
     def __init__(self, seasons: List[str], lookback_windows: List[int] = None, 
-                use_enhanced_models: bool = True, quick_mode: bool = False):
+                use_enhanced_models: bool = True, quick_mode: bool = False,
+                use_cache: bool = True, cache_max_age_days: int = 30):
         """
         Initialize the NBA prediction system.
         
@@ -44,14 +45,22 @@ class EnhancedNBAPredictor:
                         - Performs less hyperparameter optimization
                         Useful for development and testing, but for highest accuracy,
                         set to False.
+            use_cache: Whether to use cache for data loading and feature processing
+            cache_max_age_days: Maximum age of cached data in days
         """
         self.seasons = seasons
         self.lookback_windows = lookback_windows or DEFAULT_LOOKBACK_WINDOWS
         self.use_enhanced_models = use_enhanced_models
         self.quick_mode = quick_mode
+        self.use_cache = use_cache
+        self.cache_max_age_days = cache_max_age_days
         
-        # Initialize components
-        self.data_loader = NBADataLoader()
+        # Initialize caching
+        from src.utils.cache_manager import CacheManager
+        self.cache_manager = CacheManager()
+        
+        # Initialize components with caching support
+        self.data_loader = NBADataLoader(use_cache=use_cache, cache_max_age_days=cache_max_age_days)
         self.feature_processor = NBAFeatureProcessor(self.lookback_windows)
         self.player_processor = PlayerAvailabilityProcessor()
         
@@ -94,8 +103,52 @@ class EnhancedNBAPredictor:
         self.features = None
         self.targets = None
         
+        # Create a unique cache key for this predictor configuration
+        self.config_hash = self._generate_config_hash()
+        
+    def _generate_config_hash(self) -> str:
+        """
+        Generate a unique hash of the current configuration for cache lookups.
+        
+        Returns:
+            str: Hash representing this configuration
+        """
+        import hashlib
+        import json
+        
+        # Collect configuration parameters
+        config = {
+            'seasons': sorted(self.seasons),
+            'lookback_windows': sorted(self.lookback_windows),
+            'use_enhanced_models': self.use_enhanced_models,
+            'quick_mode': self.quick_mode
+        }
+        
+        # Generate a stable string representation and hash it
+        config_str = json.dumps(config, sort_keys=True)
+        hash_obj = hashlib.md5(config_str.encode())
+        
+        return hash_obj.hexdigest()
+        
     def fetch_and_process_data(self) -> None:
         """Fetch NBA data and process it into features."""
+        # Check for cached processed features first
+        if self.use_cache:
+            cache_params = {
+                'config_hash': self.config_hash,
+                'lookback_windows': sorted(self.lookback_windows),
+                'seasons': sorted(self.seasons)
+            }
+            
+            cached_features = self.cache_manager.get_cache('features', cache_params)
+            if cached_features is not None and not self.cache_manager.is_cache_stale('features', cache_params, self.cache_max_age_days):
+                print("Using cached processed features...")
+                self.games, self.advanced_metrics, self.stats_df, self.features, self.targets = cached_features
+                print(f"Loaded cached features: {len(self.features)} samples with {len(self.features.columns)} features")
+                return
+                
+            print("No valid feature cache found, processing data...")
+        
         # Load data
         print("Fetching NBA game data...")
         self.games, self.advanced_metrics = self.data_loader.fetch_games(self.seasons)
@@ -134,11 +187,52 @@ class EnhancedNBAPredictor:
         }
         self.features = pd.concat([self.features, pd.DataFrame(additional_cols, index=self.features.index)], axis=1)
         
+        # Cache the processed features
+        if self.use_cache:
+            cache_params = {
+                'config_hash': self.config_hash,
+                'lookback_windows': sorted(self.lookback_windows),
+                'seasons': sorted(self.seasons)
+            }
+            
+            cached_data = (self.games, self.advanced_metrics, self.stats_df, self.features, self.targets)
+            self.cache_manager.set_cache('features', cache_params, cached_data)
+            print(f"Cached processed features: {len(self.features)} samples with {len(self.features.columns)} features")
+        
     def train_models(self) -> None:
-        """Train all prediction models."""
+        """Train all prediction models with caching support."""
         if self.features is None:
             raise ValueError("Features not available. Call fetch_and_process_data first.")
         
+        # Check for cached trained models
+        if self.use_cache:
+            # Create cache params based on feature data and model config
+            model_cache_params = {
+                'config_hash': self.config_hash,
+                'feature_hash': self._get_feature_hash(),
+                'model_type': 'hybrid' if self.use_enhanced_models else 'standard',
+                'quick_mode': self.quick_mode
+            }
+            
+            cached_models = self.cache_manager.get_cache('models', model_cache_params)
+            if cached_models is not None and not self.cache_manager.is_cache_stale('models', model_cache_params, self.cache_max_age_days):
+                print("Using cached trained models...")
+                if self.use_enhanced_models:
+                    # For hybrid model approach
+                    self.hybrid_model = cached_models.get('hybrid_model')
+                    self.ensemble_model = cached_models.get('ensemble_model')
+                    self.deep_model_trainer = cached_models.get('deep_model')
+                else:
+                    # For separate models approach
+                    self.ensemble_model = cached_models.get('ensemble_model')
+                    self.deep_model_trainer = cached_models.get('deep_model')
+                
+                print("Successfully loaded trained models from cache")
+                return
+            
+            print("No valid model cache found, training new models...")
+        
+        # Train models
         if self.use_enhanced_models:
             # Train the hybrid model (which trains both ensemble and deep models)
             print("\nTraining advanced hybrid model...")
@@ -152,6 +246,66 @@ class EnhancedNBAPredictor:
             # Train deep model
             print("\nTraining deep learning model...")
             self.deep_model_trainer.train_deep_model(self.features)
+        
+        # Cache the trained models
+        if self.use_cache:
+            model_cache_params = {
+                'config_hash': self.config_hash,
+                'feature_hash': self._get_feature_hash(),
+                'model_type': 'hybrid' if self.use_enhanced_models else 'standard',
+                'quick_mode': self.quick_mode
+            }
+            
+            if self.use_enhanced_models:
+                cached_models = {
+                    'hybrid_model': self.hybrid_model,
+                    'ensemble_model': self.ensemble_model,
+                    'deep_model': self.deep_model_trainer
+                }
+            else:
+                cached_models = {
+                    'ensemble_model': self.ensemble_model,
+                    'deep_model': self.deep_model_trainer
+                }
+                
+            self.cache_manager.set_cache('models', model_cache_params, cached_models)
+            print("Cached trained models for future use")
+    
+    def _get_feature_hash(self) -> str:
+        """
+        Generate a hash of the current feature data for cache verification.
+        
+        Returns:
+            str: Hash representing the feature data
+        """
+        import hashlib
+        
+        # Use a sample of the features plus metadata to create a hash
+        # This is more efficient than hashing the entire feature set
+        # but still captures the essential characteristics
+        
+        if self.features is None or self.targets is None:
+            return "no_features"
+            
+        # Get shape, column names, and a data sample
+        feature_shape = self.features.shape
+        feature_columns = sorted(self.features.columns.tolist())
+        
+        # Take a sample of the actual data values (first 100 rows, every 10th column)
+        sample_cols = feature_columns[::10][:20]  # Limit to 20 columns max
+        if sample_cols:
+            data_sample = self.features[sample_cols].head(100).values.flatten()
+            # Convert to strings and join
+            data_str = ','.join([str(round(float(x), 4)) if pd.notnull(x) else 'nan' for x in data_sample])
+        else:
+            data_str = ""
+        
+        # Create a string to hash
+        feature_str = f"{feature_shape}|{','.join(feature_columns)}|{data_str}"
+        
+        # Generate the hash
+        hash_obj = hashlib.md5(feature_str.encode())
+        return hash_obj.hexdigest()
         
     def predict(self, 
                 features: pd.DataFrame,
@@ -236,6 +390,24 @@ class EnhancedNBAPredictor:
         else:
             game_date = pd.to_datetime(game_date)
             
+        # Check for cached prediction features
+        if self.use_cache:
+            # Format game date for cache key
+            formatted_date = str(game_date) if game_date is not None else "latest"
+            
+            feature_cache_params = {
+                'config_hash': self.config_hash,
+                'home_team_id': home_team_id,
+                'away_team_id': away_team_id,
+                'game_date': formatted_date,
+                'feature_version': '1.0'  # For cache invalidation if feature logic changes
+            }
+            
+            cached_features = self.cache_manager.get_cache('prediction_features', feature_cache_params)
+            if cached_features is not None and not self.cache_manager.is_cache_stale('prediction_features', feature_cache_params, self.cache_max_age_days):
+                print(f"Using cached prediction features for {home_team_id} vs {away_team_id}")
+                return cached_features
+                
         print(f"Preparing prediction for {home_team_id} (home) vs {away_team_id} (away) on {game_date}")
             
         # Find the most recent entry for both teams - critically ensure we use data strictly before game_date to prevent data leakage
@@ -287,6 +459,7 @@ class EnhancedNBAPredictor:
         # Create a new game entry with these teams
         new_game = pd.Series({
             'GAME_DATE': game_date,
+            'GAME_ID_HOME': f'PRED_{home_team_id}_{away_team_id}',  # Add a predictive GAME_ID for compatibility
             'TEAM_ID_HOME': home_team_id,
             'TEAM_ID_AWAY': away_team_id
         })
@@ -379,6 +552,26 @@ class EnhancedNBAPredictor:
         if missing_features:
             print(f"Added {len(missing_features)} missing features with default values: {missing_features[:5]}...")
         
+        # Make sure GAME_DATE is kept for reference, even if not used by the model
+        if 'GAME_DATE' not in prediction_features.columns:
+            prediction_features['GAME_DATE'] = game_date
+        
+        # Cache the prediction features
+        if self.use_cache:
+            # Format game date for cache key
+            formatted_date = str(game_date) if game_date is not None else "latest"
+            
+            feature_cache_params = {
+                'config_hash': self.config_hash,
+                'home_team_id': home_team_id,
+                'away_team_id': away_team_id,
+                'game_date': formatted_date,
+                'feature_version': '1.0'  # For cache invalidation if feature logic changes
+            }
+            
+            self.cache_manager.set_cache('prediction_features', feature_cache_params, prediction_features)
+            print(f"Cached prediction features for {home_team_id} vs {away_team_id}")
+            
         return prediction_features
         
     def _get_required_features(self) -> Set[str]:
@@ -433,7 +626,8 @@ class EnhancedNBAPredictor:
                    home_team_id: int, 
                    away_team_id: int,
                    game_date: Optional[str] = None,
-                   model_type: str = 'hybrid') -> Dict:
+                   model_type: str = 'hybrid',
+                   use_cached_prediction: bool = True) -> Dict:
         """
         Predict the outcome of a specific game with improved feature compatibility.
         
@@ -442,16 +636,35 @@ class EnhancedNBAPredictor:
             away_team_id: NBA API team ID for away team
             game_date: Game date in format 'YYYY-MM-DD' (default: latest available date)
             model_type: Type of model to use ('ensemble', 'deep', or 'hybrid')
+            use_cached_prediction: Whether to use cached prediction results
             
         Returns:
             dict: Prediction details
         """
-        # Prepare features for the game - already ensures required features are present
-        game_features = self.prepare_game_prediction(home_team_id, away_team_id, game_date)
-        
+        # Check for cached prediction if requested
+        if self.use_cache and use_cached_prediction:
+            # Format game date for cache key
+            formatted_date = str(game_date) if game_date is not None else "latest"
+            
+            pred_cache_params = {
+                'config_hash': self.config_hash,
+                'home_team_id': home_team_id,
+                'away_team_id': away_team_id,
+                'game_date': formatted_date,
+                'model_type': model_type
+            }
+            
+            cached_prediction = self.cache_manager.get_cache('predictions', pred_cache_params)
+            if cached_prediction is not None and not self.cache_manager.is_cache_stale('predictions', pred_cache_params, 1):  # 1 day max age for predictions
+                print(f"Using cached prediction for {home_team_id} vs {away_team_id}")
+                return cached_prediction
+                
         # Ensure model is trained
         if self.features is None:
             raise ValueError("Model not trained properly. Call train_models first.")
+        
+        # Prepare features for the game - already ensures required features are present
+        game_features = self.prepare_game_prediction(home_team_id, away_team_id, game_date)
         
         # Make prediction with the prepared feature set
         # The models' predict methods handle feature alignment internally now
@@ -463,16 +676,36 @@ class EnhancedNBAPredictor:
         away_team_abbrev = TEAM_ID_TO_ABBREV.get(away_team_id, str(away_team_id))
         
         # Format output
+        # Use iloc[0] to get the first row value from the DataFrame
+        # Handle 'GAME_DATE' column error by first checking if it exists
+        game_date_value = game_features['GAME_DATE'].iloc[0] if 'GAME_DATE' in game_features.columns else None
+        
         result = {
             'home_team_id': home_team_id,
             'away_team_id': away_team_id,
             'home_team': home_team_abbrev,
             'away_team': away_team_abbrev,
-            'game_date': game_features['GAME_DATE'].iloc[0],
+            'game_date': game_date_value,
             'home_win_probability': float(probs[0]),
             'confidence': float(confidence[0]),
-            'model_type': model_type
+            'model_type': model_type,
+            'prediction_time': datetime.datetime.now().isoformat()
         }
+        
+        # Cache the prediction
+        if self.use_cache:
+            # Format game date for cache key
+            formatted_date = str(game_date) if game_date is not None else "latest"
+            
+            pred_cache_params = {
+                'config_hash': self.config_hash,
+                'home_team_id': home_team_id,
+                'away_team_id': away_team_id,
+                'game_date': formatted_date,
+                'model_type': model_type
+            }
+            
+            self.cache_manager.set_cache('predictions', pred_cache_params, result)
         
         return result
         
@@ -536,13 +769,52 @@ class EnhancedNBAPredictor:
         
         return save_dir
     
+    def manage_cache(self, action: str = 'status', cache_type: str = None) -> Dict:
+        """
+        Manage the cache system with various operations.
+        
+        Args:
+            action: The action to perform ('status', 'clear', 'clear_type', 'clear_all')
+            cache_type: Specific cache type to clear (e.g., 'games', 'features', 'models')
+            
+        Returns:
+            Dict with operation result
+        """
+        if not self.use_cache:
+            return {"status": "Cache is disabled"}
+            
+        if action == 'status':
+            # Get cache statistics
+            stats = self.cache_manager.get_cache_stats()
+            return {
+                "status": "Cache statistics retrieved",
+                "statistics": stats
+            }
+            
+        elif action == 'clear_type' and cache_type:
+            # Clear specific cache type
+            count = self.cache_manager.clear_cache_type(cache_type)
+            return {
+                "status": f"Cleared {count} entries from {cache_type} cache"
+            }
+            
+        elif action == 'clear_all':
+            # Clear all caches
+            count = self.cache_manager.clear_all_cache()
+            return {
+                "status": f"Cleared all cache entries ({count} total)"
+            }
+            
+        return {"status": "Invalid action or missing parameters"}
+    
     @classmethod
-    def load_models(cls, model_dir: str) -> 'EnhancedNBAPredictor':
+    def load_models(cls, model_dir: str, use_cache: bool = True) -> 'EnhancedNBAPredictor':
         """
         Load a saved model from disk.
         
         Args:
             model_dir: Directory containing saved model files
+            use_cache: Whether to use cache for subsequent operations
             
         Returns:
             EnhancedNBAPredictor: Loaded predictor instance
@@ -558,7 +830,8 @@ class EnhancedNBAPredictor:
             seasons=config['seasons'],
             lookback_windows=config['lookback_windows'],
             use_enhanced_models=config['use_enhanced_models'],
-            quick_mode=config['quick_mode']
+            quick_mode=config['quick_mode'],
+            use_cache=use_cache
         )
         
         # Load feature processor
@@ -594,6 +867,32 @@ class EnhancedNBAPredictor:
                 feature_stats = pickle.load(f)
                 # Set as placeholder to enable prediction
                 predictor.features = pd.DataFrame(columns=feature_stats['feature_names'])
+        
+        # Store loaded models in cache if caching is enabled
+        if use_cache:
+            # Create a cache entry for the loaded models
+            model_cache_params = {
+                'config_hash': predictor.config_hash,
+                'model_type': 'hybrid' if config['use_enhanced_models'] else 'standard',
+                'quick_mode': config['quick_mode'],
+                'source': 'loaded_from_disk',
+                'model_dir': os.path.basename(model_dir)
+            }
+            
+            if config['use_enhanced_models']:
+                cached_models = {
+                    'hybrid_model': predictor.hybrid_model,
+                    'ensemble_model': predictor.ensemble_model,
+                    'deep_model': predictor.deep_model_trainer
+                }
+            else:
+                cached_models = {
+                    'ensemble_model': predictor.ensemble_model,
+                    'deep_model': predictor.deep_model_trainer
+                }
+                
+            predictor.cache_manager.set_cache('models', model_cache_params, cached_models)
+            print("Cached loaded models for future use")
         
         print(f"Models successfully loaded from {model_dir}")
         return predictor

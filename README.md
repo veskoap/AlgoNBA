@@ -280,10 +280,14 @@ AlgoNBA/
 │   ├── __init__.py
 │   ├── data/                          # Data acquisition
 │   │   ├── __init__.py
-│   │   └── data_loader.py             # NBA API integration
+│   │   ├── data_loader.py             # NBA API integration
+│   │   └── injury/
+│   │       └── injury_tracker.py      # Player injury tracking
 │   ├── features/                      # Feature engineering
 │   │   ├── __init__.py
-│   │   └── feature_processor.py       # Feature creation
+│   │   ├── feature_processor.py       # Feature creation
+│   │   └── advanced/
+│   │       └── player_availability.py # Player availability features
 │   ├── models/                        # ML/DL models
 │   │   ├── __init__.py
 │   │   ├── deep_model.py              # Base neural networks
@@ -295,9 +299,12 @@ AlgoNBA/
 │   │   ├── __init__.py
 │   │   ├── constants.py               # Shared constants
 │   │   ├── helpers.py                 # Helper functions
+│   │   ├── cache_manager.py           # Data & model caching
 │   │   └── scaling/
 │   │       └── enhanced_scaler.py     # Robust scaling
 │   └── predictor.py                   # Main predictor class
+├── data/
+│   └── cache/                         # Cache data storage
 └── CLAUDE.md                          # Development notes
 ```
 
@@ -350,6 +357,18 @@ python main.py --load-models saved_models/nba_model_20230401_120000
 
 # Combine options as needed
 python main.py --quick --standard --seasons 2022-23 --save-models
+
+# View cache statistics and size
+python main.py --cache-action status
+
+# Clear specific cache types 
+python main.py --cache-action clear_type --cache-type features
+
+# Clear all cache data
+python main.py --cache-action clear_all
+
+# Disable cache for fresh data fetching
+python main.py --no-cache
 ```
 
 ### Command Line Arguments
@@ -361,6 +380,9 @@ python main.py --quick --standard --seasons 2022-23 --save-models
 | `--quick` | Run in quick mode for faster testing |
 | `--save-models` | Save trained models to disk |
 | `--load-models PATH` | Load previously saved models from PATH |
+| `--no-cache` | Disable the cache system to always fetch fresh data |
+| `--cache-action` | Perform cache management: `status`, `clear_type`, or `clear_all` |
+| `--cache-type` | Specify cache type for cache-action: `games`, `features`, `models`, or `predictions` |
 
 ### Quick Mode Details
 
@@ -405,7 +427,8 @@ predictor = EnhancedNBAPredictor(
     seasons=['2022-23', '2023-24'],  # Recent seasons for better predictions
     use_enhanced_models=True,        # Use enhanced models for higher accuracy
     quick_mode=False,                # Full training mode
-    gpu_optimization=True            # Enable GPU acceleration if available
+    use_cache=True,                  # Enable caching for faster subsequent runs
+    cache_max_age_days=30            # Maximum age for cached data
 )
 
 # Fetch and process data
@@ -419,7 +442,8 @@ boston_vs_milwaukee = predictor.predict_game(
     home_team_id=1610612738,  # BOS
     away_team_id=1610612749,  # MIL
     game_date="2024-04-14",   # Game date
-    model_type='hybrid'       # Model to use: 'ensemble', 'deep', or 'hybrid'
+    model_type='hybrid',      # Model to use: 'ensemble', 'deep', or 'hybrid'
+    use_cached_prediction=True  # Use cached prediction if available
 )
 
 # Access prediction details
@@ -442,7 +466,15 @@ print(f"Confidence: {lakers_vs_warriors['confidence']:.2f}")
 predictor.save_models("saved_models/my_model")
 
 # Load previously saved models
-predictor.load_models("saved_models/my_model")
+loaded_predictor = EnhancedNBAPredictor.load_models("saved_models/my_model", use_cache=True)
+
+# Manage cache
+cache_stats = predictor.manage_cache(action='status')
+print(f"Cache entries: {cache_stats['statistics']['total_entries']}")
+print(f"Cache size: {cache_stats['statistics']['total_size_mb']:.2f} MB")
+
+# Clear specific cache type
+predictor.manage_cache(action='clear_type', cache_type='predictions')
 ```
 
 ## Technical Deep Dive
@@ -645,6 +677,13 @@ Areas for future enhancement:
    - ONNX model export for cross-platform deployment
    - TensorRT integration for inference optimization
    - Serverless deployment architecture
+   
+4. **Caching System Enhancements**:
+   - Distributed cache with Redis backend
+   - Incremental updates to cached data
+   - Delta compression for large datasets
+   - Cloud storage integration (S3, GCS)
+   - Automatic cache invalidation strategies
 
 ## License
 

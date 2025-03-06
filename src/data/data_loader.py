@@ -3,22 +3,35 @@ Data loading functions for the NBA prediction model.
 """
 import pandas as pd
 import time
-from typing import Dict, List, Tuple
+import os
+import json
+from datetime import datetime
+from typing import Dict, List, Tuple, Optional
 from nba_api.stats.endpoints import leaguegamefinder
 
 from src.utils.constants import BASIC_STATS_COLUMNS, TEAM_LOCATIONS, TEAM_ID_TO_ABBREV
+from src.utils.cache_manager import CacheManager
 
 
 class NBADataLoader:
-    """Class for loading and preprocessing NBA game data."""
+    """Class for loading and preprocessing NBA game data with caching support."""
     
-    def __init__(self):
-        """Initialize the NBA data loader."""
-        pass
+    def __init__(self, use_cache: bool = True, cache_max_age_days: int = 30):
+        """
+        Initialize the NBA data loader.
+        
+        Args:
+            use_cache: Whether to use cache for data loading
+            cache_max_age_days: Maximum age of cached data in days
+        """
+        self.use_cache = use_cache
+        self.cache_max_age_days = cache_max_age_days
+        self.cache_manager = CacheManager()
     
     def fetch_games(self, seasons: List[str]) -> Tuple[pd.DataFrame, Dict]:
         """
         Fetch NBA games data with detailed statistics and advanced metrics.
+        Uses cache when available to avoid redundant API calls.
         
         Args:
             seasons: List of NBA seasons in format 'YYYY-YY'
@@ -26,32 +39,103 @@ class NBADataLoader:
         Returns:
             tuple: (games_df, advanced_metrics_dict)
         """
+        # Create cache key parameters
+        cache_params = {
+            'seasons': sorted(seasons),
+            'api_version': '1.0'  # Track API version for cache invalidation
+        }
+        
+        # Check for cached data
+        if self.use_cache:
+            print("Checking cache for game data...")
+            cached_data = self.cache_manager.get_cache('games', cache_params)
+            
+            # Check if cache is available and not stale
+            if cached_data is not None and not self.cache_manager.is_cache_stale('games', cache_params, self.cache_max_age_days):
+                games_df, advanced_metrics = cached_data
+                print(f"Using cached data for {len(seasons)} seasons: {len(games_df)} games loaded")
+                return games_df, advanced_metrics
+                
+            print("No valid cache found. Fetching fresh data...")
+        
         print("Fetching basic game data...")
         all_games = []
         advanced_metrics = {}
+        
+        # Track new data for determining if cache update is needed
+        has_new_data = False
 
         for season in seasons:
-            print(f"Fetching {season} data...")
-            # Basic game data
-            games = leaguegamefinder.LeagueGameFinder(
-                season_nullable=season,
-                season_type_nullable='Regular Season'
-            ).get_data_frames()[0]
-            all_games.append(games)
-
-            # Advanced metrics
-            metrics = self.fetch_advanced_metrics(season)
-            if not metrics.empty:
-                advanced_metrics[season] = metrics
-
-            time.sleep(1)  # Respect API rate limits
-
+            # Check if this specific season is in cache
+            season_cache_params = {'season': season, 'api_version': '1.0'}
+            
+            if self.use_cache:
+                season_cache = self.cache_manager.get_cache('games_season', season_cache_params)
+                if season_cache is not None and not self.cache_manager.is_cache_stale('games_season', season_cache_params, self.cache_max_age_days):
+                    print(f"Using cached data for season {season}")
+                    season_games, season_metrics = season_cache
+                    all_games.append(season_games)
+                    if season_metrics:
+                        advanced_metrics[season] = season_metrics
+                    continue
+            
+            # If we get here, we need to fetch fresh data for this season
+            has_new_data = True
+            print(f"Fetching fresh data for {season}...")
+            
+            try:
+                # Basic game data
+                games = leaguegamefinder.LeagueGameFinder(
+                    season_nullable=season,
+                    season_type_nullable='Regular Season'
+                ).get_data_frames()[0]
+                
+                # Advanced metrics
+                metrics = self.fetch_advanced_metrics(season)
+                season_metrics = None
+                if not metrics.empty:
+                    advanced_metrics[season] = metrics
+                    season_metrics = metrics
+                
+                # Cache this season's data
+                if self.use_cache:
+                    season_data = (games, season_metrics)
+                    self.cache_manager.set_cache('games_season', season_cache_params, season_data)
+                    print(f"Cached {len(games)} games for season {season}")
+                
+                all_games.append(games)
+                time.sleep(1)  # Respect API rate limits
+            
+            except Exception as e:
+                print(f"Error fetching data for season {season}: {e}")
+                # Try to use older cached data if available, even if it's stale
+                if self.use_cache:
+                    season_cache = self.cache_manager.get_cache('games_season', season_cache_params)
+                    if season_cache is not None:
+                        print(f"Using stale cached data for season {season} due to fetch error")
+                        season_games, season_metrics = season_cache
+                        all_games.append(season_games)
+                        if season_metrics:
+                            advanced_metrics[season] = season_metrics
+        
+        # If no games were fetched or found in cache, return empty data
+        if not all_games:
+            print("No game data found for specified seasons")
+            empty_games = pd.DataFrame(columns=BASIC_STATS_COLUMNS)
+            return empty_games, {}
+        
+        # Process all games
         df = pd.concat(all_games, ignore_index=True)
         df['GAME_DATE'] = pd.to_datetime(df['GAME_DATE'])
 
         # Split into home/away
         home = df[df['MATCHUP'].str.contains('vs')].copy()
         away = df[df['MATCHUP'].str.contains('@')].copy()
+        
+        if home.empty or away.empty:
+            print("Warning: No home or away games found after filtering")
+            empty_games = pd.DataFrame(columns=[col + suffix for col in BASIC_STATS_COLUMNS for suffix in ['_HOME', '_AWAY']])
+            return empty_games, advanced_metrics
 
         # Merge games data - ensuring we only merge exact game matches
         games = pd.merge(
@@ -70,12 +154,19 @@ class NBADataLoader:
         # Sort chronologically to prevent any data leakage from future games
         games = games.sort_values('GAME_DATE_HOME')
         print(f"Retrieved {len(games)} games with enhanced statistics")
+        
+        # Cache the combined data if there's new data
+        if self.use_cache and has_new_data:
+            combined_data = (games, advanced_metrics)
+            self.cache_manager.set_cache('games', cache_params, combined_data)
+            print(f"Cached combined data for {len(seasons)} seasons: {len(games)} games")
 
         return games, advanced_metrics
 
     def fetch_advanced_metrics(self, season: str) -> pd.DataFrame:
         """
         Fetch advanced team metrics for a given season.
+        Uses cache when available to avoid redundant API calls.
         
         Args:
             season: NBA season in format 'YYYY-YY'
@@ -83,16 +174,36 @@ class NBADataLoader:
         Returns:
             pd.DataFrame: Advanced team metrics or empty DataFrame if fetch fails
         """
+        # Create cache parameters
+        cache_params = {
+            'season': season,
+            'type': 'advanced_metrics',
+            'api_version': '1.0'
+        }
+        
+        # Check cache first
+        if self.use_cache:
+            cached_metrics = self.cache_manager.get_cache('metrics', cache_params)
+            if cached_metrics is not None and not self.cache_manager.is_cache_stale('metrics', cache_params, self.cache_max_age_days):
+                print(f"Using cached advanced metrics for {season}")
+                return cached_metrics
+        
         try:
             from nba_api.stats.endpoints import teamestimatedmetrics
 
-            print(f"Fetching advanced metrics for {season}...")
+            print(f"Fetching fresh advanced metrics for {season}...")
             metrics = teamestimatedmetrics.TeamEstimatedMetrics(
                 season=season,
                 season_type='Regular Season'
             ).get_data_frames()[0]
 
             print(f"Successfully fetched advanced metrics for {season}")
+            
+            # Cache the results
+            if self.use_cache and not metrics.empty:
+                self.cache_manager.set_cache('metrics', cache_params, metrics)
+                print(f"Cached advanced metrics for {season}")
+                
             time.sleep(1)  # Respect API rate limits
             return metrics
 
@@ -102,6 +213,14 @@ class NBADataLoader:
 
         except Exception as e:
             print(f"Warning: Could not fetch advanced metrics for {season} - {str(e)}")
+            
+            # Try to use stale cache data in case of an error
+            if self.use_cache:
+                cached_metrics = self.cache_manager.get_cache('metrics', cache_params)
+                if cached_metrics is not None:
+                    print(f"Using stale cached metrics for {season} due to fetch error")
+                    return cached_metrics
+                    
             return pd.DataFrame()
             
     def fetch_player_availability(self, season: str) -> pd.DataFrame:
@@ -115,25 +234,72 @@ class NBADataLoader:
         Returns:
             pd.DataFrame: Enhanced player availability data
         """
-        # Define a cache directory to store data between runs
-        import os
-        cache_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'cache')
-        os.makedirs(cache_dir, exist_ok=True)
+        # Create cache parameters for player availability data
+        avail_cache_params = {
+            'season': season,
+            'type': 'player_availability',
+            'api_version': '1.0'
+        }
         
-        # Define cache paths
-        player_cache_file = os.path.join(cache_dir, f'player_data_{season.replace("-", "_")}.pkl')
-        game_cache_file = os.path.join(cache_dir, f'game_availability_{season.replace("-", "_")}.pkl')
+        # Check for cached availability data
+        if self.use_cache:
+            cached_availability = self.cache_manager.get_cache('player_availability', avail_cache_params)
+            if cached_availability is not None and not self.cache_manager.is_cache_stale('player_availability', avail_cache_params, self.cache_max_age_days):
+                print(f"Using cached player availability data for {season}")
+                return cached_availability
+                
+        # Create cache parameters for player impact data (used in availability processing)
+        player_cache_params = {
+            'season': season,
+            'type': 'player_impact',
+            'api_version': '1.0'
+        }
         
-        # Try to load from cache first
-        try:
-            if os.path.exists(game_cache_file):
-                print(f"Loading player availability data from cache for {season}...")
-                availability_data = pd.read_pickle(game_cache_file)
-                if not availability_data.empty:
-                    print(f"Successfully loaded {len(availability_data)} player availability records from cache")
-                    return availability_data
-        except Exception as e:
-            print(f"Error loading cache, will fetch fresh data: {e}")
+        # Check for cached player impact data
+        player_data = None
+        if self.use_cache:
+            player_data = self.cache_manager.get_cache('player_impact', player_cache_params)
+            if player_data is not None and not self.cache_manager.is_cache_stale('player_impact', player_cache_params, self.cache_max_age_days):
+                print(f"Using cached player impact data for {season}")
+                
+        # Fallback to old cache system for backward compatibility
+        if player_data is None:
+            # Define old cache paths
+            import os
+            cache_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'cache')
+            os.makedirs(cache_dir, exist_ok=True)
+            player_cache_file = os.path.join(cache_dir, f'player_data_{season.replace("-", "_")}.pkl')
+            game_cache_file = os.path.join(cache_dir, f'game_availability_{season.replace("-", "_")}.pkl')
+            
+            # Try to load from old cache
+            try:
+                if os.path.exists(game_cache_file):
+                    print(f"Loading player availability data from legacy cache for {season}...")
+                    availability_data = pd.read_pickle(game_cache_file)
+                    if not availability_data.empty:
+                        print(f"Successfully loaded {len(availability_data)} player availability records from legacy cache")
+                        
+                        # Migrate to new cache system
+                        if self.use_cache:
+                            self.cache_manager.set_cache('player_availability', avail_cache_params, availability_data)
+                            print(f"Migrated legacy cache to new cache system")
+                            
+                        return availability_data
+            except Exception as e:
+                print(f"Error loading legacy cache, will fetch fresh data: {e}")
+                
+            # Try to load player impact data from old cache
+            try:
+                if os.path.exists(player_cache_file):
+                    print(f"Loading player data from legacy cache for {season}...")
+                    player_data = pd.read_pickle(player_cache_file)
+                    
+                    # Migrate to new cache system
+                    if self.use_cache:
+                        self.cache_manager.set_cache('player_impact', player_cache_params, player_data)
+                        print(f"Migrated legacy player data to new cache system")
+            except Exception as e:
+                print(f"Error loading legacy player cache: {e}")
             
         try:
             from nba_api.stats.endpoints import teamplayerdashboard, boxscoreadvancedv2, playergamelogs
@@ -586,6 +752,7 @@ class NBADataLoader:
     def fetch_teams(self, season: str) -> pd.DataFrame:
         """
         Fetch all NBA teams active during a given season.
+        Uses cache when available to avoid redundant API calls.
         
         Args:
             season: NBA season in format 'YYYY-YY'
@@ -593,8 +760,24 @@ class NBADataLoader:
         Returns:
             pd.DataFrame: Teams data
         """
+        # Create cache parameters
+        cache_params = {
+            'season': season,
+            'type': 'teams',
+            'api_version': '1.0'
+        }
+        
+        # Check cache first
+        if self.use_cache:
+            cached_teams = self.cache_manager.get_cache('teams', cache_params)
+            if cached_teams is not None and not self.cache_manager.is_cache_stale('teams', cache_params, self.cache_max_age_days):
+                print(f"Using cached teams data for {season}")
+                return cached_teams
+                
         try:
             from nba_api.stats.endpoints import commonteamyears, teaminfocommon
+            
+            print(f"Fetching fresh teams data for {season}...")
             
             # Get teams for the specified season
             # Get teams data with proper season ID format
@@ -648,11 +831,25 @@ class NBADataLoader:
                     print(f"Error fetching info for team {team_id}: {e}")
                     continue
             
+            teams_df = pd.DataFrame(columns=['TEAM_ID', 'TEAM_NAME'])
             if team_details:
-                return pd.concat(team_details, ignore_index=True)
-            else:
-                return pd.DataFrame(columns=['TEAM_ID', 'TEAM_NAME'])
+                teams_df = pd.concat(team_details, ignore_index=True)
+                
+            # Cache the results
+            if self.use_cache and not teams_df.empty:
+                self.cache_manager.set_cache('teams', cache_params, teams_df)
+                print(f"Cached teams data for {season}")
+                
+            return teams_df
                 
         except Exception as e:
             print(f"Error fetching teams: {e}")
+            
+            # Try to use stale cache in case of error
+            if self.use_cache:
+                cached_teams = self.cache_manager.get_cache('teams', cache_params)
+                if cached_teams is not None:
+                    print(f"Using stale cached teams data for {season} due to fetch error")
+                    return cached_teams
+                    
             return pd.DataFrame(columns=['TEAM_ID', 'TEAM_NAME'])
