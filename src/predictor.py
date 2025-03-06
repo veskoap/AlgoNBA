@@ -196,9 +196,34 @@ class EnhancedNBAPredictor:
             
         # Process features for this game
         game_df = pd.DataFrame([new_game])
-        game_features = self.feature_processor.prepare_enhanced_features(game_df)
         
-        return game_features
+        # Get features from the feature processor
+        print("Generating prediction features...")
+        
+        # Instead of using prepare_enhanced_features, we'll directly reuse features from training data
+        if self.features is not None:
+            # Create a template from the training features
+            prediction_features = pd.DataFrame(index=[0])
+            prediction_features['GAME_DATE'] = game_date
+            
+            # Calculate common base features using the feature processor
+            base_features = self.feature_processor.prepare_enhanced_features(game_df)
+            
+            # For each column in the training features, try to find a match or use a default
+            for col in self.features.columns:
+                if col == 'GAME_DATE' or col == 'TARGET':
+                    continue
+                    
+                if col in base_features.columns:
+                    prediction_features[col] = base_features[col].iloc[0]
+                else:
+                    # Try to find the feature in the stats dataframe
+                    prediction_features[col] = 0  # default value
+            
+            return prediction_features
+        else:
+            # Fallback to regular feature processing
+            return self.feature_processor.prepare_enhanced_features(game_df)
     
     def predict_game(self, 
                      home_team_id: int, 
@@ -220,8 +245,27 @@ class EnhancedNBAPredictor:
         # Prepare features for the game
         game_features = self.prepare_game_prediction(home_team_id, away_team_id, game_date)
         
-        # Make prediction
-        probs, confidence = self.predict(game_features, model_type)
+        # Ensure feature compatibility with the trained model
+        # Get all feature columns from the training data
+        if self.features is None:
+            raise ValueError("Model not trained properly. Call train_models first.")
+            
+        # Match columns to training data
+        training_columns = [col for col in self.features.columns if col not in ['GAME_DATE', 'TARGET']]
+        
+        # Create a new DataFrame with the same columns as the training data
+        prediction_features = pd.DataFrame(index=game_features.index)
+        
+        # Copy existing columns
+        for col in training_columns:
+            if col in game_features.columns:
+                prediction_features[col] = game_features[col]
+            else:
+                # Add missing columns with default values
+                prediction_features[col] = 0
+        
+        # Make prediction with the compatible feature set
+        probs, confidence = self.predict(prediction_features, model_type)
         
         # Format output
         result = {

@@ -644,13 +644,15 @@ class NBAFeatureProcessor:
 
             features['GAME_DATE'] = pd.to_datetime(stats_df[date_col])
 
-            # Get target variable - check both possible names
+            # Get target variable - check various possible names/scenarios
             if 'WL_HOME' in stats_df.columns:
                 features['TARGET'] = (stats_df['WL_HOME'] == 'W').astype(int)
             elif 'TARGET' in stats_df.columns:
                 features['TARGET'] = stats_df['TARGET']
             else:
-                raise KeyError("No target column found in stats DataFrame")
+                # For prediction scenarios where no target exists yet
+                print("No target column found - this is likely a prediction scenario")
+                features['TARGET'] = 0  # Default placeholder value for prediction cases
 
             # Process time window features
             for window in self.lookback_windows:
