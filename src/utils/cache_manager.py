@@ -16,16 +16,86 @@ class CacheManager:
     Provides mechanisms to save and load various data types with versioning.
     """
     
-    def __init__(self, cache_dir: str = 'data/cache'):
+    def __init__(self, cache_dir: str = None):
         """
         Initialize the cache manager.
         
         Args:
-            cache_dir: Base directory for cached data
+            cache_dir: Base directory for cached data. If None, will use an appropriate
+                     default directory based on the environment (Colab or local).
         """
-        self.cache_dir = cache_dir
+        # Set up appropriate cache directory for current environment
+        self.cache_dir = self._determine_cache_dir(cache_dir)
         self._ensure_cache_dir()
         self.cache_registry = self._load_registry()
+        
+    def _determine_cache_dir(self, cache_dir: str = None) -> str:
+        """
+        Determine the appropriate cache directory based on environment.
+        
+        Args:
+            cache_dir: User-specified cache directory or None
+            
+        Returns:
+            str: Appropriate cache directory path
+        """
+        import os
+        import platform
+        
+        # If user specified a directory, use that
+        if cache_dir is not None:
+            return cache_dir
+            
+        # Check if running in Google Colab
+        try:
+            import google.colab
+            is_colab = True
+        except ImportError:
+            is_colab = False
+            
+        if is_colab:
+            # In Colab, use a directory in /content that persists during session
+            colab_cache = '/content/algoNBA_cache'
+            
+            # Also check if a Google Drive is mounted and prefer that for persistence
+            drive_path = '/content/drive/MyDrive/AlgoNBA/cache'
+            if os.path.exists('/content/drive'):
+                # Drive is mounted, check if our directory exists or can be created
+                try:
+                    # Try creating the directory if it doesn't exist
+                    os.makedirs(drive_path, exist_ok=True)
+                    return drive_path
+                except Exception:
+                    # Fall back to session storage
+                    return colab_cache
+            return colab_cache
+            
+        else:
+            # Running locally, check the platform
+            system = platform.system()
+            machine = platform.machine()
+            
+            # Base path depends on the platform
+            if system == 'Darwin':  # macOS
+                # Check if running on Apple Silicon (like M1)
+                if machine == 'arm64':
+                    # Use a project-relative path for portability
+                    return os.path.abspath('data/cache')
+                else:
+                    # Intel Mac - use same path
+                    return os.path.abspath('data/cache')
+                    
+            elif system == 'Linux':
+                # Use a project-relative path but ensure it's absolute
+                return os.path.abspath('data/cache')
+                
+            elif system == 'Windows':
+                # Use a project-relative path but ensure it's absolute
+                return os.path.abspath('data/cache')
+                
+            else:
+                # Fallback for unknown systems
+                return os.path.abspath('data/cache')
         
     def _ensure_cache_dir(self) -> None:
         """Create cache directory structure if it doesn't exist."""

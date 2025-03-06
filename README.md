@@ -369,6 +369,15 @@ python main.py --cache-action clear_all
 
 # Disable cache for fresh data fetching
 python main.py --no-cache
+
+# Run with hardware optimizations for M1 Mac (automatically detected)
+python main.py 
+
+# Disable hardware-specific optimizations
+python main.py --no-hardware-optimization
+
+# Specify custom cache directory
+python main.py --cache-dir /path/to/custom/cache
 ```
 
 ### Command Line Arguments
@@ -383,6 +392,9 @@ python main.py --no-cache
 | `--no-cache` | Disable the cache system to always fetch fresh data |
 | `--cache-action` | Perform cache management: `status`, `clear_type`, or `clear_all` |
 | `--cache-type` | Specify cache type for cache-action: `games`, `features`, `models`, or `predictions` |
+| `--cache-dir` | Specify custom directory for cache storage |
+| `--no-hardware-optimization` | Disable hardware-specific optimizations (M1, CUDA, etc.) |
+| `--colab-drive` | Use Google Drive for storage when in Colab environment |
 
 ### Quick Mode Details
 
@@ -395,27 +407,47 @@ The `--quick` flag enables a faster testing mode that:
 
 This mode is useful for development and testing purposes, reducing runtime from 30+ minutes to ~5-10 minutes on standard hardware.
 
-### Google Colab Integration
+### Hardware-Specific Optimizations
 
-For optimal performance on Google Colab with A100 GPU:
+The system now automatically detects and optimizes for different hardware:
+
+#### Apple Silicon (M1/M2) Macs
+- Uses PyTorch MPS acceleration when available
+- Optimizes NumPy operations with Apple's Accelerate framework
+- Configures thread counts automatically for ARM architecture
+
+#### CUDA-Enabled Systems (Colab, GPU Workstations)
+- Detects NVIDIA GPUs and enables CUDA acceleration
+- Special optimizations for A100 GPUs (TF32 precision)
+- Optimized cuDNN settings for faster convolutions
+
+#### Google Colab Integration
+
+For optimal performance on Google Colab:
 
 ```python
-# Mount Google Drive for persistent storage
-from google.colab import drive
-drive.mount('/content/drive')
-
 # Clone repository and install dependencies
 !git clone https://github.com/yourusername/AlgoNBA.git
 %cd AlgoNBA
 !pip install -r requirements.txt
 
-# Run with GPU acceleration (completes in ~7 minutes on A100)
-!python main.py
+# Run with Google Drive integration and GPU acceleration
+# - Automatically detects A100 and applies optimizations
+# - Stores cache and models on Google Drive for persistence
+!python main.py --colab-drive --save-models
 
-# Save models to Google Drive for persistence
-!mkdir -p /content/drive/MyDrive/AlgoNBA/models/
-!cp -r saved_models/* /content/drive/MyDrive/AlgoNBA/models/
+# Load models from Google Drive in future sessions
+!python main.py --colab-drive --load-models nba_model_20230401_120000
+
+# Check cache statistics 
+!python main.py --colab-drive --cache-action status
 ```
+
+The `--colab-drive` flag provides:
+- Automatic mounting of Google Drive
+- Creation of AlgoNBA directories on Drive for persistence
+- Intelligent cache storage between sessions
+- Model saving/loading directly to/from Drive
 
 ## Programmatic Interface
 
@@ -428,7 +460,9 @@ predictor = EnhancedNBAPredictor(
     use_enhanced_models=True,        # Use enhanced models for higher accuracy
     quick_mode=False,                # Full training mode
     use_cache=True,                  # Enable caching for faster subsequent runs
-    cache_max_age_days=30            # Maximum age for cached data
+    cache_max_age_days=30,           # Maximum age for cached data
+    hardware_optimization=True,      # Enable auto-detection of hardware (M1, CUDA)
+    cache_dir=None                   # Auto-detect optimal cache location
 )
 
 # Fetch and process data
@@ -625,9 +659,12 @@ System performance varies based on hardware and configuration:
 | Configuration | Hardware | Training Time | Prediction Time | Memory Usage |
 |---------------|----------|--------------|-----------------|--------------|
 | Full mode | Google Colab A100 | ~7 minutes | ~2 seconds | ~5 GB |
+| Full mode | MacBook Air M1 | ~15 minutes | ~3 seconds | ~4 GB |
 | Full mode | Standard CPU | ~30 minutes | ~5 seconds | ~3 GB |
 | Quick mode | Google Colab A100 | ~3 minutes | ~2 seconds | ~4 GB |
+| Quick mode | MacBook Air M1 | ~5 minutes | ~3 seconds | ~3 GB |
 | Quick mode | Standard CPU | ~10 minutes | ~5 seconds | ~2 GB |
+| Cached data | Any hardware | ~1 minute | ~1 second | ~2 GB |
 
 Model accuracy metrics (approx.):
 

@@ -25,7 +25,8 @@ class EnhancedNBAPredictor:
     
     def __init__(self, seasons: List[str], lookback_windows: List[int] = None, 
                 use_enhanced_models: bool = True, quick_mode: bool = False,
-                use_cache: bool = True, cache_max_age_days: int = 30):
+                use_cache: bool = True, cache_max_age_days: int = 30,
+                cache_dir: str = None, hardware_optimization: bool = True):
         """
         Initialize the NBA prediction system.
         
@@ -47,6 +48,9 @@ class EnhancedNBAPredictor:
                         set to False.
             use_cache: Whether to use cache for data loading and feature processing
             cache_max_age_days: Maximum age of cached data in days
+            cache_dir: Custom directory for cache storage (if None, will auto-detect)
+            hardware_optimization: Whether to apply hardware-specific optimizations
+                                  (M1/Apple Silicon, CUDA, etc.)
         """
         self.seasons = seasons
         self.lookback_windows = lookback_windows or DEFAULT_LOOKBACK_WINDOWS
@@ -54,15 +58,93 @@ class EnhancedNBAPredictor:
         self.quick_mode = quick_mode
         self.use_cache = use_cache
         self.cache_max_age_days = cache_max_age_days
+        self.hardware_optimization = hardware_optimization
         
         # Initialize caching
         from src.utils.cache_manager import CacheManager
-        self.cache_manager = CacheManager()
+        self.cache_manager = CacheManager(cache_dir=cache_dir)
+        
+        # Auto-detect and configure hardware optimizations if requested
+        if hardware_optimization:
+            self._configure_hardware_optimizations()
         
         # Initialize components with caching support
         self.data_loader = NBADataLoader(use_cache=use_cache, cache_max_age_days=cache_max_age_days)
         self.feature_processor = NBAFeatureProcessor(self.lookback_windows)
         self.player_processor = PlayerAvailabilityProcessor()
+        
+    def _configure_hardware_optimizations(self):
+        """Configure optimizations for the current hardware platform."""
+        import platform
+        import os
+        
+        # Detect platform specifics
+        system = platform.system()
+        machine = platform.machine()
+        
+        # Apply Apple Silicon (M1/M2) optimizations
+        if system == 'Darwin' and machine == 'arm64':
+            os.environ['VECLIB_MAXIMUM_THREADS'] = str(os.cpu_count())
+            
+            try:
+                import torch
+                # Use MPS (Metal Performance Shaders) if available
+                if torch.backends.mps.is_available():
+                    print("Apple Silicon (M1/M2) detected: Using MPS for acceleration")
+                    self.device = torch.device('mps')
+                else:
+                    print("Apple Silicon (M1/M2) detected: MPS not available, using CPU")
+                    self.device = torch.device('cpu')
+                    
+                # Make sure PyTorch is optimized for ARM
+                if hasattr(torch, 'set_num_threads'):
+                    torch.set_num_threads(os.cpu_count())
+            except ImportError:
+                print("PyTorch not available, using CPU for computation")
+                self.device = 'cpu'
+                
+        # Check for CUDA GPU availability (for Linux, Windows, Intel Macs)
+        elif system in ['Linux', 'Windows'] or (system == 'Darwin' and machine != 'arm64'):
+            try:
+                import torch
+                if torch.cuda.is_available():
+                    # Detect if we're on Colab with an A100
+                    gpu_name = torch.cuda.get_device_name(0) if torch.cuda.device_count() > 0 else ""
+                    
+                    if 'A100' in gpu_name:
+                        print("NVIDIA A100 GPU detected: Applying A100-specific optimizations")
+                        # Enable TF32 precision for A100 GPUs
+                        torch.backends.cuda.matmul.allow_tf32 = True
+                        torch.backends.cudnn.allow_tf32 = True
+                    else:
+                        print(f"CUDA GPU detected ({gpu_name}): Enabling GPU acceleration")
+                    
+                    # Enable cuDNN benchmarking for faster convolutions
+                    torch.backends.cudnn.benchmark = True
+                    self.device = torch.device('cuda')
+                else:
+                    print("No CUDA GPU detected, using CPU for computation")
+                    self.device = torch.device('cpu')
+            except ImportError:
+                print("PyTorch not available, using CPU for computation")
+                self.device = 'cpu'
+                
+        # Handle Colab-specific environment optimizations
+        try:
+            import google.colab
+            # We're in Colab - set up appropriate environment
+            print("Google Colab environment detected")
+            self.is_colab = True
+            
+            # Check if we have a high-RAM environment
+            import psutil
+            total_ram = psutil.virtual_memory().total / (1024 ** 3)  # GB
+            if total_ram > 25:  # High-RAM Colab instance
+                print(f"High-RAM environment detected ({total_ram:.1f} GB): Optimizing for memory usage")
+                # Can use larger batch sizes, etc.
+            
+        except ImportError:
+            self.is_colab = False
         
         # Initialize appropriate models based on flag
         if use_enhanced_models:
@@ -808,17 +890,32 @@ class EnhancedNBAPredictor:
         return {"status": "Invalid action or missing parameters"}
     
     @classmethod
-    def load_models(cls, model_dir: str, use_cache: bool = True) -> 'EnhancedNBAPredictor':
+    def load_models(cls, model_dir: str, use_cache: bool = True, 
+                  cache_dir: str = None, hardware_optimization: bool = True) -> 'EnhancedNBAPredictor':
         """
         Load a saved model from disk.
         
         Args:
             model_dir: Directory containing saved model files
             use_cache: Whether to use cache for subsequent operations
+            cache_dir: Custom cache directory path
+            hardware_optimization: Whether to apply hardware-specific optimizations
             
         Returns:
             EnhancedNBAPredictor: Loaded predictor instance
         """
+        # Check if running in Colab and model_dir is a Google Drive path
+        try:
+            import google.colab
+            is_colab = True
+            # If model_dir is a Google Drive path but Drive isn't mounted, mount it
+            if model_dir.startswith('/content/drive') and not os.path.exists('/content/drive'):
+                print("Google Drive not mounted. Mounting now...")
+                from google.colab import drive
+                drive.mount('/content/drive')
+        except ImportError:
+            is_colab = False
+            
         print(f"Loading models from {model_dir}...")
         
         # Load configuration
@@ -831,7 +928,9 @@ class EnhancedNBAPredictor:
             lookback_windows=config['lookback_windows'],
             use_enhanced_models=config['use_enhanced_models'],
             quick_mode=config['quick_mode'],
-            use_cache=use_cache
+            use_cache=use_cache,
+            cache_dir=cache_dir,
+            hardware_optimization=hardware_optimization
         )
         
         # Load feature processor

@@ -42,6 +42,7 @@ Example usage:
     python main.py --cache-action clear_all
 """
 import sys
+import os
 import pandas as pd
 import argparse
 import warnings
@@ -88,15 +89,49 @@ def main():
                            'cache type, or clear all cache.')
     parser.add_argument('--cache-type', choices=['games', 'features', 'models', 'predictions'],
                       help='Specify cache type for cache-action')
+    parser.add_argument('--cache-dir', type=str,
+                      help='Specify custom directory for cache storage')
+    parser.add_argument('--no-hardware-optimization', action='store_true',
+                      help='Disable hardware-specific optimizations for M1/CUDA/Colab environments')
+    parser.add_argument('--colab-drive', action='store_true',
+                      help='Use Google Drive for storage when in Colab environment')
     args = parser.parse_args()
     
     # Use enhanced models by default unless --standard flag is provided
     use_enhanced = not args.standard
     model_type = "enhanced" if use_enhanced else "standard"
     
-    # Determine whether to use cache
+    # Determine whether to use cache and hardware optimizations
     use_cache = not args.no_cache
     cache_status = "disabled" if args.no_cache else "enabled"
+    hw_optimization = not args.no_hardware_optimization
+    hw_status = "disabled" if args.no_hardware_optimization else "enabled"
+    cache_dir = args.cache_dir
+    
+    # Check if running in Google Colab
+    try:
+        import google.colab
+        is_colab = True
+        print("Google Colab environment detected")
+        
+        # Set up Drive integration if requested
+        if args.colab_drive:
+            from google.colab import drive
+            if not os.path.exists('/content/drive'):
+                print("Mounting Google Drive for persistent storage...")
+                drive.mount('/content/drive')
+                
+            # Create AlgoNBA directories in Drive if they don't exist
+            os.makedirs('/content/drive/MyDrive/AlgoNBA/cache', exist_ok=True)
+            os.makedirs('/content/drive/MyDrive/AlgoNBA/models', exist_ok=True)
+            print("Google Drive mounted and AlgoNBA directories created")
+            
+            # Use Drive for cache unless explicitly specified
+            if cache_dir is None:
+                cache_dir = '/content/drive/MyDrive/AlgoNBA/cache'
+                print(f"Using Google Drive for cache storage: {cache_dir}")
+    except ImportError:
+        is_colab = False
     
     # Check if we're just performing a cache management action
     if args.cache_action:
@@ -105,7 +140,9 @@ def main():
             seasons=args.seasons,
             use_enhanced_models=use_enhanced,
             quick_mode=args.quick,
-            use_cache=True  # Must be enabled for cache management
+            use_cache=True,  # Must be enabled for cache management
+            cache_dir=cache_dir,
+            hardware_optimization=hw_optimization
         )
         
         # Perform the requested cache action
@@ -115,6 +152,7 @@ def main():
             stats = result['statistics']
             print(f"Cache entries: {stats['total_entries']}")
             print(f"Cache size: {stats['total_size_mb']:.2f} MB")
+            print(f"Cache directory: {temp_predictor.cache_manager.cache_dir}")
             print("Cache types:")
             for cache_type, count in stats['by_type'].items():
                 print(f"  - {cache_type}: {count} entries")
@@ -124,18 +162,34 @@ def main():
     
     # Check if we're loading pre-trained models
     if args.load_models:
-        print(f"Loading pre-trained models from {args.load_models}...")
-        predictor = EnhancedNBAPredictor.load_models(args.load_models, use_cache=use_cache)
-        print(f"Models loaded successfully! Cache {cache_status}.")
+        # For Colab with Drive integration, adjust model path if needed
+        model_dir = args.load_models
+        if is_colab and args.colab_drive and not model_dir.startswith('/content/drive'):
+            # Check if model exists in Drive
+            drive_model_path = f"/content/drive/MyDrive/AlgoNBA/models/{os.path.basename(model_dir)}"
+            if os.path.exists(drive_model_path):
+                model_dir = drive_model_path
+                print(f"Using model from Google Drive: {model_dir}")
+        
+        print(f"Loading pre-trained models from {model_dir}...")
+        predictor = EnhancedNBAPredictor.load_models(
+            model_dir, 
+            use_cache=use_cache,
+            cache_dir=cache_dir,
+            hardware_optimization=hw_optimization
+        )
+        print(f"Models loaded successfully! Cache {cache_status}, Hardware optimizations {hw_status}.")
     else:
         # Initialize a new predictor with specified settings
         print(f"Starting NBA prediction system with {model_type} models...")
-        print(f"Cache system {cache_status}.")
+        print(f"Cache system {cache_status}, Hardware optimizations {hw_status}.")
         predictor = EnhancedNBAPredictor(
             seasons=args.seasons,
             use_enhanced_models=use_enhanced,
             quick_mode=args.quick,
-            use_cache=use_cache
+            use_cache=use_cache,
+            cache_dir=cache_dir,
+            hardware_optimization=hw_optimization
         )
     
     try:
@@ -151,8 +205,15 @@ def main():
             
             # Save models if requested
             if args.save_models:
-                save_dir = predictor.save_models()
-                print(f"Models saved to {save_dir}")
+                # Determine save directory
+                if is_colab and args.colab_drive:
+                    # Use Google Drive for persistence when in Colab
+                    save_dir = predictor.save_models("content/drive/MyDrive/AlgoNBA/models")
+                    print(f"Models saved to Google Drive: {save_dir}")
+                else:
+                    # Use standard location
+                    save_dir = predictor.save_models()
+                    print(f"Models saved to {save_dir}")
         
         # Print top features
         top_features = predictor.get_feature_importances(10)
