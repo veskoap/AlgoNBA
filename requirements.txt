@@ -1,0 +1,9 @@
+pandas>=1.5.0
+numpy>=1.24.0
+scikit-learn>=1.2.0
+xgboost>=1.7.0
+lightgbm>=3.3.0
+torch>=2.0.0
+nba_api>=1.2.1
+geopy>=2.3.0
+pytz>=2023.3
