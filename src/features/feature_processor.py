@@ -1170,6 +1170,15 @@ class NBAFeatureProcessor:
             related_features = [col for col in feature_cols if prefix in col]
             print(f"{description}: {len(related_features)} features")
         
+        # Remove any non-numeric columns that would cause issues with XGBoost
+        # Specifically exclude object columns and datetime columns
+        non_numeric_cols = [col for col in enhanced_features.columns 
+                           if col != 'TARGET' and enhanced_features[col].dtype not in [np.float64, np.int64, bool, 'float32', 'int32']]
+        
+        if non_numeric_cols:
+            print(f"Removing {len(non_numeric_cols)} non-numeric columns: {non_numeric_cols[:5]}...")
+            enhanced_features = enhanced_features.drop(columns=non_numeric_cols)
+        
         # Return only numerical features (excluding date) and target
         return enhanced_features, target
         
@@ -1209,7 +1218,29 @@ class NBAFeatureProcessor:
                 target_value = stats_df['TARGET'] if 'TARGET' in stats_df.columns else 0
                 features = pd.concat([features, pd.DataFrame({'TARGET': target_value}, index=features.index)], axis=1)
             
-            print(f"Successfully created {len(features.columns)-2} features")  # -2 for GAME_DATE and TARGET
+            # Remove any non-numeric columns that would cause issues with machine learning models
+            non_numeric_cols = [col for col in features.columns 
+                              if col != 'TARGET' and features[col].dtype not in [np.float64, np.int64, bool, 'float32', 'int32']]
+            
+            if non_numeric_cols:
+                print(f"Removing {len(non_numeric_cols)} non-numeric columns for ML compatibility: {non_numeric_cols[:5]}...")
+                features = features.drop(columns=non_numeric_cols)
+            
+            # Check for any missing values and fill them
+            missing_values = features.isna().sum().sum()
+            if missing_values > 0:
+                print(f"Filling {missing_values} missing values with zeros")
+                features = features.fillna(0)
+            
+            # Check for infinite values
+            inf_values = np.isinf(features).sum().sum()
+            if inf_values > 0:
+                print(f"Replacing {inf_values} infinite values with large numbers")
+                features = features.replace([np.inf, -np.inf], [1e9, -1e9])
+            
+            numeric_feature_count = sum(features[col].dtype in [np.float64, np.int64, bool, 'float32', 'int32'] 
+                                      for col in features.columns if col != 'TARGET')
+            print(f"Successfully created {numeric_feature_count} numeric features")
             return features
             
         except Exception as e:
