@@ -613,7 +613,7 @@ class NBADataLoader:
         avail_cache_params = {
             'season': season,
             'type': 'player_availability',
-            'api_version': '1.0'
+            'api_version': '1.1'  # Updated version to fix merging issues
         }
         
         # Check for cached availability data
@@ -627,7 +627,7 @@ class NBADataLoader:
         player_cache_params = {
             'season': season,
             'type': 'player_impact',
-            'api_version': '1.0'
+            'api_version': '1.1'  # Updated version to fix data structure issues
         }
         
         # Check for cached player impact data
@@ -637,47 +637,83 @@ class NBADataLoader:
             if player_data is not None and not self.cache_manager.is_cache_stale('player_impact', player_cache_params, self.cache_max_age_days):
                 print(f"Using cached player impact data for {season}")
                 
-        # Fallback to old cache system for backward compatibility
+        # Initialize empty player_data with proper structure if it's None
         if player_data is None:
-            # Define old cache paths
-            import os
-            cache_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'cache')
-            os.makedirs(cache_dir, exist_ok=True)
-            player_cache_file = os.path.join(cache_dir, f'player_data_{season.replace("-", "_")}.pkl')
-            game_cache_file = os.path.join(cache_dir, f'game_availability_{season.replace("-", "_")}.pkl')
-            
-            # Try to load from old cache
-            try:
-                if os.path.exists(game_cache_file):
-                    print(f"Loading player availability data from legacy cache for {season}...")
-                    availability_data = pd.read_pickle(game_cache_file)
-                    if not availability_data.empty:
-                        print(f"Successfully loaded {len(availability_data)} player availability records from legacy cache")
-                        
-                        # Migrate to new cache system
-                        if self.use_cache:
-                            self.cache_manager.set_cache('player_availability', avail_cache_params, availability_data)
-                            print(f"Migrated legacy cache to new cache system")
-                            
-                        return availability_data
-            except Exception as e:
-                print(f"Error loading legacy cache, will fetch fresh data: {e}")
+            player_data = {
+                'player_impact': {}, 
+                'team_lineup_strength': {}, 
+                'player_stats_by_id': {}, 
+                'player_position_map': {}
+            }
                 
-            # Try to load player impact data from old cache
+        # Fallback to old cache system for backward compatibility
+        # Define old cache paths
+        import os
+        cache_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'cache')
+        os.makedirs(cache_dir, exist_ok=True)
+        player_cache_file = os.path.join(cache_dir, f'player_data_{season.replace("-", "_")}.pkl')
+        game_cache_file = os.path.join(cache_dir, f'game_availability_{season.replace("-", "_")}.pkl')
+        
+        # Try to load from old cache for availability data
+        try:
+            if os.path.exists(game_cache_file):
+                print(f"Loading player availability data from legacy cache for {season}...")
+                availability_data = pd.read_pickle(game_cache_file)
+                if not availability_data.empty:
+                    print(f"Successfully loaded {len(availability_data)} player availability records from legacy cache")
+                    
+                    # Verify data structure - add any missing columns
+                    required_columns = [
+                        'GAME_ID', 'GAME_ID_HOME', 'TEAM_ID', 'IS_HOME', 
+                        'PLAYERS_AVAILABLE', 'STARTERS_AVAILABLE', 'LINEUP_IMPACT'
+                    ]
+                    
+                    for column in required_columns:
+                        if column not in availability_data.columns:
+                            print(f"Adding missing column {column} to availability data")
+                            availability_data[column] = 0
+                    
+                    # Migrate to new cache system
+                    if self.use_cache:
+                        self.cache_manager.set_cache('player_availability', avail_cache_params, availability_data)
+                        print(f"Migrated legacy cache to new cache system")
+                        
+                    return availability_data
+        except Exception as e:
+            print(f"Error loading legacy availability cache, will fetch fresh data: {e}")
+            
+        # Try to load player impact data from old cache if player_data is empty
+        if not player_data.get('player_impact'):
             try:
                 if os.path.exists(player_cache_file):
                     print(f"Loading player data from legacy cache for {season}...")
-                    player_data = pd.read_pickle(player_cache_file)
+                    loaded_data = pd.read_pickle(player_cache_file)
+                    
+                    # Ensure we have a dictionary with the expected structure
+                    if isinstance(loaded_data, dict):
+                        player_data = loaded_data
+                    elif isinstance(loaded_data, pd.DataFrame):
+                        # Convert DataFrame to expected structure if needed
+                        player_data = {
+                            'player_impact': {}, 
+                            'team_lineup_strength': {}, 
+                            'player_stats_by_id': {}, 
+                            'player_position_map': {}
+                        }
                     
                     # Migrate to new cache system
                     if self.use_cache:
                         self.cache_manager.set_cache('player_impact', player_cache_params, player_data)
                         print(f"Migrated legacy player data to new cache system")
-                    return player_data
             except Exception as e:
                 print(f"Error loading legacy player cache: {e}")
-                # Initialize empty player_data to avoid reference errors
-                player_data = {}
+                # Clear/reset player_data structure if there was an error loading
+                player_data = {
+                    'player_impact': {}, 
+                    'team_lineup_strength': {}, 
+                    'player_stats_by_id': {}, 
+                    'player_position_map': {}
+                }
             
         try:
             from nba_api.stats.endpoints import teamplayerdashboard, boxscoreadvancedv2, playergamelogs
@@ -897,8 +933,8 @@ class NBADataLoader:
                                     from nba_api.stats.endpoints import playerdashboardbygeneralsplits
                                     
                                     # This endpoint often has PIE data
+                                    # Removed team_id from parameters since it's causing the error
                                     pie_data = playerdashboardbygeneralsplits.PlayerDashboardByGeneralSplits(
-                                        team_id=team_id,
                                         season=season,
                                         measure_type_detailed='Advanced',
                                         per_mode_detailed='PerGame'
@@ -916,7 +952,34 @@ class NBADataLoader:
                                                 how='left'
                                             )
                                 except Exception as e:
-                                    print(f"Failed to fetch PIE data directly: {e}")
+                                    specific_error = str(e)
+                                    print(f"Failed to fetch PIE data directly: {specific_error[:200]}")
+                                    
+                                    # Try alternative endpoint if the specific error is about unexpected keyword
+                                    if "unexpected keyword" in specific_error:
+                                        try:
+                                            # Try with different parameters
+                                            from nba_api.stats.endpoints import leaguedashplayerstats
+                                            alt_data = leaguedashplayerstats.LeagueDashPlayerStats(
+                                                season=season,
+                                                measure_type_detailed='Advanced'
+                                            ).get_data_frames()[0]
+                                            
+                                            if 'PIE' in alt_data.columns:
+                                                # Filter to only this team's players and merge
+                                                if 'TEAM_ID' in alt_data.columns:
+                                                    team_pie_data = alt_data[alt_data['TEAM_ID'] == team_id]
+                                                    if not team_pie_data.empty:
+                                                        pie_subset = team_pie_data[['PLAYER_ID', 'PIE']].copy()
+                                                        if 'PLAYER_ID' in team_players.columns:
+                                                            team_players = pd.merge(
+                                                                team_players, 
+                                                                pie_subset,
+                                                                on='PLAYER_ID',
+                                                                how='left'
+                                                            )
+                                        except Exception as e2:
+                                            print(f"Alternative PIE endpoint also failed: {str(e2)[:100]}")
                                 
                                 # If still missing, calculate manually
                                 if 'PIE' not in team_players.columns:

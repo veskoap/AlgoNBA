@@ -174,8 +174,13 @@ class PlayerAvailabilityProcessor:
                         injury_games = np.random.choice([1, 2, 3, 4, 5, 10, 15, 20], 
                                                        p=[0.3, 0.25, 0.2, 0.1, 0.05, 0.05, 0.03, 0.02])
                         
-                        # Calculate return date
-                        recovery_days = int(injury_games * 2)  # Convert to int - Approximate days between games
+                        # Calculate return date with safe conversion
+                        # Ensure injury_games is a number
+                        if not isinstance(injury_games, (int, float)):
+                            injury_games = 3  # Default if somehow we got a non-numeric value
+                        
+                        # Safer computation with explicit float conversion first
+                        recovery_days = int(float(injury_games) * 2)  # Approximate days between games
                         from datetime import timedelta
                         return_date = game_date + timedelta(days=recovery_days)
                         
@@ -276,27 +281,89 @@ class PlayerAvailabilityProcessor:
         # Create copy to avoid modifying original
         features = player_features.copy()
         
+        # Ensure GAME_DATE is properly formatted
+        if 'GAME_DATE' in features.columns:
+            if not pd.api.types.is_datetime64_dtype(features['GAME_DATE']):
+                try:
+                    features['GAME_DATE'] = pd.to_datetime(features['GAME_DATE'])
+                except Exception as e:
+                    print(f"Warning: Could not convert GAME_DATE to datetime: {e}")
+                    # Create a dummy date column if conversion fails
+                    features['GAME_DATE'] = pd.to_datetime('2023-01-01')
+        else:
+            # If no GAME_DATE column, add a dummy one for sorting
+            print("Warning: No GAME_DATE column found, using dummy date")
+            features['GAME_DATE'] = pd.to_datetime('2023-01-01')
+            
+        # Ensure all impact columns exist
+        for team_type in ['HOME', 'AWAY']:
+            impact_col = f'PLAYER_IMPACT_{team_type}'
+            if impact_col not in features.columns:
+                print(f"Warning: {impact_col} column not found, initializing with default values")
+                features[impact_col] = 1.0  # Default impact value
+        
         # Group by team and calculate rolling statistics
         for team_type in ['HOME', 'AWAY']:
             team_col = f'TEAM_ID_{team_type}'
             impact_col = f'PLAYER_IMPACT_{team_type}'
             
-            # Sort by date for each team
+            # Ensure team_col exists
+            if team_col not in features.columns:
+                print(f"Warning: {team_col} column not found, skipping impact momentum calculation")
+                features[f'PLAYER_IMPACT_{team_type}_3G_AVG'] = features[impact_col]
+                features[f'PLAYER_IMPACT_{team_type}_MOMENTUM'] = 1.0
+                continue
+                
+            # Sort by date for each team (safer approach)
             features_sorted = features.sort_values(['GAME_DATE', team_col])
             
-            # Calculate 3-game rolling average of player impact
-            features[f'PLAYER_IMPACT_{team_type}_3G_AVG'] = features_sorted.groupby(team_col)[impact_col].transform(
-                lambda x: x.rolling(3, min_periods=1).mean()
-            )
-            
-            # Calculate impact momentum (current vs 3-game average)
-            features[f'PLAYER_IMPACT_{team_type}_MOMENTUM'] = (
-                features[impact_col] / features[f'PLAYER_IMPACT_{team_type}_3G_AVG']
-            ).clip(0.8, 1.2)  # Clip to avoid extreme values
-            
+            try:
+                # Calculate 3-game rolling average of player impact using a safer approach
+                # First create a Series to hold the results
+                rolling_avgs = pd.Series(index=features.index)
+                
+                # Process each team separately to avoid mixing data
+                for team_id in features[team_col].unique():
+                    # Skip if team_id is NaN
+                    if pd.isna(team_id):
+                        continue
+                        
+                    # Get data for this team, sorted by date
+                    team_data = features_sorted[features_sorted[team_col] == team_id]
+                    if len(team_data) > 0:
+                        # Calculate rolling average
+                        team_rolling = team_data[impact_col].rolling(3, min_periods=1).mean()
+                        # Store values in the result series
+                        for idx, val in zip(team_data.index, team_rolling.values):
+                            rolling_avgs[idx] = val
+                
+                # Assign results to the DataFrame
+                features[f'PLAYER_IMPACT_{team_type}_3G_AVG'] = rolling_avgs
+                
+                # Handle potential NaN values
+                features[f'PLAYER_IMPACT_{team_type}_3G_AVG'] = features[f'PLAYER_IMPACT_{team_type}_3G_AVG'].fillna(
+                    features[impact_col]  # Use current impact as fallback
+                )
+                
+                # Calculate impact momentum (current vs 3-game average) with safety checks
+                # Avoid division by zero
+                safe_avg = features[f'PLAYER_IMPACT_{team_type}_3G_AVG'].replace(0, 1.0)
+                features[f'PLAYER_IMPACT_{team_type}_MOMENTUM'] = (
+                    features[impact_col] / safe_avg
+                ).clip(0.8, 1.2)  # Clip to avoid extreme values
+                
+            except Exception as e:
+                # Fallback if calculation fails
+                print(f"Error calculating momentum for {team_type}: {e}")
+                features[f'PLAYER_IMPACT_{team_type}_3G_AVG'] = features[impact_col]
+                features[f'PLAYER_IMPACT_{team_type}_MOMENTUM'] = 1.0
+        
         # Calculate momentum differential
-        features['PLAYER_IMPACT_MOMENTUM_DIFF'] = (
-            features['PLAYER_IMPACT_HOME_MOMENTUM'] - features['PLAYER_IMPACT_AWAY_MOMENTUM']
-        )
+        if 'PLAYER_IMPACT_HOME_MOMENTUM' in features.columns and 'PLAYER_IMPACT_AWAY_MOMENTUM' in features.columns:
+            features['PLAYER_IMPACT_MOMENTUM_DIFF'] = (
+                features['PLAYER_IMPACT_HOME_MOMENTUM'] - features['PLAYER_IMPACT_AWAY_MOMENTUM']
+            )
+        else:
+            features['PLAYER_IMPACT_MOMENTUM_DIFF'] = 0.0
         
         return features

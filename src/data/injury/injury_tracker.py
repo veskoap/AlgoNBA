@@ -556,13 +556,13 @@ class PlayerInjuryTracker:
             conn.close()
             return pd.DataFrame()
     
-    def estimate_recovery_time(self, injury_type: str, body_part: str) -> Tuple[int, int]:
+    def estimate_recovery_time(self, injury_type: Optional[str], body_part: Optional[str]) -> Tuple[int, int]:
         """
         Estimate recovery time range for given injury.
         
         Args:
-            injury_type: Type of injury
-            body_part: Affected body part
+            injury_type: Type of injury (or None)
+            body_part: Affected body part (or None)
             
         Returns:
             tuple: (min_days, max_days) for recovery
@@ -581,18 +581,37 @@ class PlayerInjuryTracker:
             'covid': (10, 21)
         }
         
-        key = f"{injury_type}_{body_part}".lower()
+        # Handle None inputs safely
+        safe_injury_type = "" if injury_type is None else str(injury_type).lower()
+        safe_body_part = "" if body_part is None else str(body_part).lower()
         
+        # Create key with non-empty parts only
+        key_parts = []
+        if safe_injury_type:
+            key_parts.append(safe_injury_type)
+        if safe_body_part:
+            key_parts.append(safe_body_part)
+            
+        key = "_".join(key_parts) if key_parts else ""
+        
+        # Check direct mapping first
         if key in recovery_times:
             return recovery_times[key]
-        elif injury_type and injury_type.lower() in ['fracture', 'broken']:
+            
+        # Check generic injury types
+        if safe_injury_type in ['fracture', 'broken']:
             return (42, 84)  # Generic fracture timeline
-        elif injury_type and injury_type.lower() in ['sprain']:
+        elif safe_injury_type in ['sprain']:
             return (7, 28)  # Generic sprain timeline
-        elif injury_type and injury_type.lower() in ['strain']:
+        elif safe_injury_type in ['strain']:
             return (7, 21)  # Generic strain timeline
+        elif safe_injury_type in ['contusion', 'bruise']:
+            return (3, 10)  # Generic contusion timeline
+        elif safe_injury_type in ['illness', 'sick']:
+            return (3, 10)  # Generic illness timeline
         else:
-            return (7, 21)  # Default
+            # If no information available, use default
+            return (7, 21)  # Default moderate injury
     
     def generate_injury_features(self, games_df: pd.DataFrame,
                                player_impact_scores: Dict[int, Dict]) -> pd.DataFrame:
