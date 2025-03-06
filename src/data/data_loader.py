@@ -615,23 +615,55 @@ class NBADataLoader:
                         try:
                             # First attempt with nullable parameter
                             try:
-                                # Try with advanced metrics for PIE data
-                                from nba_api.stats.endpoints import teamplayerdashboardbyclutch
-                                # This endpoint is more likely to contain PIE data
-                                dashboard = teamplayerdashboardbyclutch.TeamPlayerDashboardByClutch(
+                                # Try the PlayerDashboardByAdvanced endpoint which specifically contains PIE
+                                from nba_api.stats.endpoints import playerdashboardbyteamperformance
+                                
+                                # This is one of the best endpoints for PIE data
+                                dashboard = playerdashboardbyteamperformance.PlayerDashboardByTeamPerformance(
                                     team_id=team_id,
                                     season=season,
-                                    per_mode_simple='PerGame'
+                                    measure_type_detailed='Advanced',
+                                    per_mode_detailed='PerGame'
                                 ).get_data_frames()
                                 
-                                # The first dataframe has overall stats
+                                # The first dataframe has overall stats with PIE
                                 team_players = dashboard[0]
                                 
-                                # If we don't get PIE here, try another endpoint
+                                # If we still don't get PIE, try the general advanced endpoint
                                 if 'PIE' not in team_players.columns:
-                                    raise ValueError("PIE not found in clutch dashboard, trying standard dashboard")
+                                    from nba_api.stats.endpoints import teamdashboardbyplayerperformance
+                                    
+                                    dashboard = teamdashboardbyplayerperformance.TeamDashboardByPlayerPerformance(
+                                        team_id=team_id,
+                                        season=season,
+                                        measure_type_detailed='Advanced',
+                                        per_mode_detailed='PerGame'
+                                    ).get_data_frames()
+                                    
+                                    team_players = dashboard[0]
+                                    
+                                    if 'PIE' not in team_players.columns:
+                                        raise ValueError("PIE not found in advanced dashboard, trying standard endpoint")
                                     
                             except Exception as e:
+                                # If we're getting rate limited, add a short delay and try again with another endpoint
+                                if "429" in str(e) or "timeout" in str(e).lower():
+                                    print(f"Rate limited on advanced stats for team {team_id}, waiting and trying another endpoint")
+                                    time.sleep(1)  # Wait a bit longer for rate limits
+                                
+                                # Try the efficiency endpoint for PIE data
+                                try:
+                                    from nba_api.stats.endpoints import teamplayerdashboardbyteamperformance
+                                    
+                                    dashboard = teamplayerdashboardbyteamperformance.TeamPlayerDashboardByTeamPerformance(
+                                        team_id=team_id,
+                                        season=season,
+                                        measure_type_detailed='Advanced',
+                                        per_mode_detailed='PerGame'
+                                    ).get_data_frames()
+                                    
+                                    team_players = dashboard[0]
+                                except Exception as e2:
                                 # Fallback to standard dashboard
                                 team_players = teamplayerdashboard.TeamPlayerDashboard(
                                     team_id=team_id,
@@ -668,20 +700,49 @@ class NBADataLoader:
                         
                         # Calculate player impact scores based on stats
                         if not team_players.empty:
-                            # First check if we need to calculate PIE (if it's missing)
+                            # Check if PIE is missing and try to fetch it directly if possible
                             if 'PIE' not in team_players.columns:
-                                print(f"PIE not available from API for team {self.get_team_abbrev(team_id)}, calculating manually")
-                                # Calculate a PIE-like metric ourselves when not available from API
-                                # Formula to approximate PIE based on available stats
-                                if all(col in team_players.columns for col in ['PTS', 'REB', 'AST', 'STL', 'BLK', 'MIN']):
-                                    team_players['PIE'] = (
-                                        (team_players['PTS'] + team_players['REB'] + team_players['AST'] + 
-                                         team_players['STL'] + team_players['BLK']) / 
-                                        (team_players['MIN'] + 1)  # Add 1 to avoid division by zero
-                                    ) / 10.0  # Scale to 0-1 range similar to PIE
-                                else:
-                                    # If needed statistics aren't available, create a simple proxy
-                                    team_players['PIE'] = 0.1  # Default value
+                                print(f"PIE not found in main endpoint for team {self.get_team_abbrev(team_id)}, trying PIE-specific endpoint")
+                                try:
+                                    # Try one more specialized endpoint for PIE data
+                                    from nba_api.stats.endpoints import playerdashboardbygeneralsplits
+                                    
+                                    # This endpoint often has PIE data
+                                    pie_data = playerdashboardbygeneralsplits.PlayerDashboardByGeneralSplits(
+                                        team_id=team_id,
+                                        season=season,
+                                        measure_type_detailed='Advanced',
+                                        per_mode_detailed='PerGame'
+                                    ).get_data_frames()[0]
+                                    
+                                    # If we found PIE, merge it into our main dataframe
+                                    if 'PIE' in pie_data.columns and 'PLAYER_ID' in pie_data.columns:
+                                        pie_subset = pie_data[['PLAYER_ID', 'PIE']].copy()
+                                        # Merge PIE data with team_players
+                                        if 'PLAYER_ID' in team_players.columns:
+                                            team_players = pd.merge(
+                                                team_players, 
+                                                pie_subset,
+                                                on='PLAYER_ID',
+                                                how='left'
+                                            )
+                                except Exception as e:
+                                    print(f"Failed to fetch PIE data directly: {e}")
+                                
+                                # If still missing, calculate manually
+                                if 'PIE' not in team_players.columns:
+                                    print(f"PIE not available from API for team {self.get_team_abbrev(team_id)}, calculating manually")
+                                    # Calculate a PIE-like metric ourselves when not available from API
+                                    # Formula to approximate PIE based on available stats
+                                    if all(col in team_players.columns for col in ['PTS', 'REB', 'AST', 'STL', 'BLK', 'MIN']):
+                                        team_players['PIE'] = (
+                                            (team_players['PTS'] + team_players['REB'] + team_players['AST'] + 
+                                             team_players['STL'] + team_players['BLK']) / 
+                                            (team_players['MIN'] + 1)  # Add 1 to avoid division by zero
+                                        ) / 10.0  # Scale to 0-1 range similar to PIE
+                                    else:
+                                        # If needed statistics aren't available, create a simple proxy
+                                        team_players['PIE'] = 0.1  # Default value
                             
                             # Check for USG_PCT
                             if 'USG_PCT' not in team_players.columns:
