@@ -235,6 +235,71 @@ class FeatureTransformer:
             win_pct_diff = dependencies[0]  # WIN_PCT_DIFF_30D
             rest_diff = dependencies[1]  # REST_DIFF
             df[feature_name] = df[win_pct_diff] * df[rest_diff]
+            
+        elif feature_name == 'MATCHUP_COMPATIBILITY':
+            pace_home = dependencies[0]  # PACE_mean_HOME_30D
+            pace_away = dependencies[1]  # PACE_mean_AWAY_30D
+            fg3a_home = dependencies[2]  # FG3A_mean_HOME_30D
+            fg3a_away = dependencies[3]  # FG3A_mean_AWAY_30D
+            
+            # Calculate pace similarity (opposite of difference)
+            pace_similarity = 1.0 / (1.0 + abs(df[pace_home] - df[pace_away]))
+            
+            # Calculate 3-point tendency similarity (opposite of difference)
+            fg3_similarity = 1.0 / (1.0 + abs(df[fg3a_home] - df[fg3a_away]))
+            
+            # Combine into a single metric (higher = more similar styles)
+            df[feature_name] = (pace_similarity + fg3_similarity) / 2.0
+            
+        elif feature_name == 'STYLE_ADVANTAGE':
+            pace_home = dependencies[0]  # PACE_mean_HOME_30D
+            pace_away = dependencies[1]  # PACE_mean_AWAY_30D
+            fg3_pct_home = dependencies[2]  # FG3_PCT_mean_HOME_30D
+            fg3_pct_away = dependencies[3]  # FG3_PCT_mean_AWAY_30D
+            
+            # Fast team vs slow team advantage
+            pace_advantage = (df[pace_home] - df[pace_away]) / (df[pace_home] + df[pace_away] + 0.001)
+            
+            # 3-point shooting advantage
+            shooting_advantage = (df[fg3_pct_home] - df[fg3_pct_away]) / (df[fg3_pct_home] + df[fg3_pct_away] + 0.001)
+            
+            # Combine into a style advantage metric
+            df[feature_name] = pace_advantage + shooting_advantage
+            
+        elif feature_name == 'MATCHUP_HISTORY_SCORE':
+            h2h_win_pct = dependencies[0]  # H2H_WIN_PCT
+            h2h_margin = dependencies[1]  # H2H_AVG_MARGIN
+            h2h_momentum = dependencies[2]  # H2H_MOMENTUM
+            
+            # Normalize margin to -1 to 1 range
+            normalized_margin = df[h2h_margin] / 30.0  # Typical max margin
+            normalized_margin = normalized_margin.clip(-1, 1)
+            
+            # Combine into a weighted matchup score
+            df[feature_name] = (
+                0.5 * df[h2h_win_pct] +  # 50% weight on win percentage
+                0.3 * normalized_margin +  # 30% weight on scoring margin
+                0.2 * df[h2h_momentum]    # 20% weight on recent momentum
+            )
+            
+        elif feature_name == 'TRAVEL_FATIGUE':
+            travel_distance = dependencies[0]  # TRAVEL_DISTANCE
+            timezone_diff = dependencies[1]  # TIMEZONE_DIFF
+            
+            # Normalize distance (typical max domestic flight ~3000 miles)
+            normalized_distance = df[travel_distance] / 3000.0
+            
+            # Combine distance and timezone effect
+            # Timezone changes have more impact than pure distance
+            df[feature_name] = normalized_distance + (abs(df[timezone_diff]) * 0.5)
+            df[feature_name] = df[feature_name].clip(0, 1)  # Scale 0-1
+            
+        elif feature_name == 'LINEUP_IMPACT_DIFF':
+            home_impact = dependencies[0]  # LINEUP_IMPACT_HOME
+            away_impact = dependencies[1]  # LINEUP_IMPACT_AWAY
+            
+            # Simple difference in lineup impact scores
+            df[feature_name] = df[home_impact] - df[away_impact]
     
     def _get_base_feature_name(self, feature_name: str) -> str:
         """
@@ -321,9 +386,35 @@ class NBAFeatureProcessor:
         features['TEAM_ID_HOME'] = games['TEAM_ID_HOME']
         features['TEAM_ID_AWAY'] = games['TEAM_ID_AWAY']
         features['TARGET'] = (games['WL_HOME'] == 'W').astype(int)
+        
+        # Add contextual features
+        # Weekend game flag
+        features['WEEKEND_GAME'] = (pd.to_datetime(games['GAME_DATE_HOME']).dt.dayofweek >= 5).astype(int)
+        
+        # Add nationally televised game flag (placeholder - would need actual TV schedule data)
+        features['NATIONAL_TV'] = 0
+        
+        # Add rivalry matchup flag (placeholder - would need predefined rivalry pairs)
+        features['RIVALRY_MATCHUP'] = 0
 
         # Ensure proper sorting of features DataFrame
         features = features.sort_values(['GAME_DATE', 'TEAM_ID_HOME', 'TEAM_ID_AWAY'])
+        
+        # Add stadium-specific home advantage (would ideally be based on historical home win % by arena)
+        # For now, use a simplified placeholder that could be replaced with actual data
+        home_teams = games['TEAM_ID_HOME'].unique()
+        stadium_advantage = {}
+        
+        for team_id in home_teams:
+            team_home_games = games[games['TEAM_ID_HOME'] == team_id]
+            if len(team_home_games) > 0:
+                win_pct = (team_home_games['WL_HOME'] == 'W').mean()
+                # Normalize around average home advantage of ~60%
+                stadium_advantage[team_id] = (win_pct - 0.5) / 0.1  # Scale to make 60% → 1.0
+        
+        # Add stadium advantage to features
+        features['STADIUM_HOME_ADVANTAGE'] = features['TEAM_ID_HOME'].map(
+            stadium_advantage).fillna(1.0).clip(-2, 2)  # Clip to reasonable range
 
         # Calculate advanced stats for all games
         advanced_stats = games.apply(calculate_advanced_stats, axis=1)
@@ -380,6 +471,10 @@ class NBAFeatureProcessor:
         team_games['PACE'] = team_games['FGA'] + 0.4 * team_games['FTA'] - 1.07 * (
             team_games['OREB'] / (team_games['OREB'] + team_games['DREB'])
         ) * (team_games['FGA'] - team_games['FGM']) + team_games['TOV']
+        
+        # Add day of week feature for weekend games
+        team_games['GAME_DAY'] = pd.to_datetime(team_games['GAME_DATE']).dt.dayofweek
+        team_games['IS_WEEKEND'] = (team_games['GAME_DAY'] >= 5).astype(int)  # 5=Saturday, 6=Sunday
 
         # Calculate rolling stats for each window
         for window in self.lookback_windows:
@@ -409,7 +504,14 @@ class NBAFeatureProcessor:
                 'OREB': 'mean',
                 'DREB': 'mean',
                 'STL': 'mean',
-                'BLK': 'mean'
+                'BLK': 'mean',
+                'FGA': 'mean',
+                'FGM': 'mean',
+                'FG_PCT': 'mean',
+                'FG3A': 'mean',
+                'FG3M': 'mean',
+                'FG3_PCT': 'mean',
+                'IS_WEEKEND': 'mean'
             })
 
             # Flatten multi-index columns
@@ -431,6 +533,26 @@ class NBAFeatureProcessor:
                 lambda x: (x == x.iloc[-1]).sum() if len(x) > 0 else 0
             )
             rolling_stats['STREAK'] = streak_lengths.reset_index()['WIN']
+            
+            # Add weekend performance metrics
+            weekend_data = team_games[team_games['IS_WEEKEND'] == 1].sort_values(['TEAM_ID', 'GAME_DATE']).groupby('TEAM_ID')
+            if not weekend_data.empty:
+                weekend_win_pct = weekend_data['WIN'].mean().reset_index()
+                weekend_win_pct.columns = ['TEAM_ID', 'WEEKEND_WIN_PCT']
+                
+                # Merge with rolling_stats
+                rolling_stats = pd.merge(
+                    rolling_stats.reset_index(),
+                    weekend_win_pct,
+                    on='TEAM_ID',
+                    how='left'
+                ).set_index(['TEAM_ID', 'GAME_DATE'])
+                
+                # Fill NaN values with overall win percentage
+                rolling_stats['WEEKEND_WIN_PCT'].fillna(rolling_stats['WIN_mean'], inplace=True)
+            else:
+                # If no weekend data available, use overall win percentage
+                rolling_stats['WEEKEND_WIN_PCT'] = rolling_stats['WIN_mean']
 
             # Create separate home and away stats
             home_stats = rolling_stats.copy()
@@ -603,6 +725,26 @@ class NBAFeatureProcessor:
             h2h_stats[(home_team, away_team)]['home_wins'].append(
                 1 if game['WL_HOME'] == 'W' else 0
             )
+            
+            # Store additional style metrics for matchup analysis
+            if all(col in game for col in ['PACE_HOME', 'PACE_AWAY']):
+                h2h_stats[(home_team, away_team)]['pace_diff'].append(
+                    game['PACE_HOME'] - game['PACE_AWAY']
+                )
+            
+            if all(col in game for col in ['FG3_PCT_HOME', 'FG3_PCT_AWAY']):
+                h2h_stats[(home_team, away_team)]['three_pt_diff'].append(
+                    game['FG3_PCT_HOME'] - game['FG3_PCT_AWAY']
+                )
+                
+            # Track weekend performance in matchups
+            if 'GAME_DATE_HOME' in game:
+                game_day = pd.to_datetime(game['GAME_DATE_HOME']).dayofweek
+                is_weekend = 1 if game_day >= 5 else 0  # 5=Saturday, 6=Sunday
+                h2h_stats[(home_team, away_team)]['weekend_games'].append(is_weekend)
+                h2h_stats[(home_team, away_team)]['weekend_wins'].append(
+                    1 if is_weekend == 1 and game['WL_HOME'] == 'W' else 0
+                )
 
         # Calculate enhanced H2H features
         h2h_features_list = []
@@ -626,7 +768,11 @@ class NBAFeatureProcessor:
                     'H2H_AVG_MARGIN': 0,
                     'H2H_STREAK': 0,
                     'H2H_HOME_ADVANTAGE': 0,
-                    'H2H_MOMENTUM': 0
+                    'H2H_MOMENTUM': 0,
+                    'H2H_STYLE_DIFF': 0,
+                    'H2H_WEEKEND_WIN_PCT': 0.5,
+                    'H2H_PACE_ADVANTAGE': 0,
+                    'H2H_SHOOTING_ADVANTAGE': 0
                 })
                 continue
 
@@ -647,6 +793,40 @@ class NBAFeatureProcessor:
                 weights = np.exp(-np.arange(len(recent_wins)) / 5)  # Exponential decay
                 momentum = np.average(recent_wins, weights=weights) if len(recent_wins) > 0 else 0.5
 
+                # Calculate style differences and advantages
+                style_diff = 0
+                pace_advantage = 0
+                shooting_advantage = 0
+                weekend_win_pct = 0.5
+                
+                if 'pace_diff' in h2h_stats[(home_team, away_team)] and recent_idx:
+                    recent_pace_diffs = [h2h_stats[(home_team, away_team)]['pace_diff'][i] for i in recent_idx 
+                                         if i < len(h2h_stats[(home_team, away_team)]['pace_diff'])]
+                    if recent_pace_diffs:
+                        pace_advantage = np.mean(recent_pace_diffs)
+                
+                if 'three_pt_diff' in h2h_stats[(home_team, away_team)] and recent_idx:
+                    recent_three_pt_diffs = [h2h_stats[(home_team, away_team)]['three_pt_diff'][i] for i in recent_idx
+                                            if i < len(h2h_stats[(home_team, away_team)]['three_pt_diff'])]
+                    if recent_three_pt_diffs:
+                        shooting_advantage = np.mean(recent_three_pt_diffs)
+                
+                # Combined style difference metric
+                style_diff = abs(pace_advantage) + abs(shooting_advantage)
+                
+                # Weekend performance
+                if 'weekend_games' in h2h_stats[(home_team, away_team)] and 'weekend_wins' in h2h_stats[(home_team, away_team)]:
+                    recent_weekend_games = [h2h_stats[(home_team, away_team)]['weekend_games'][i] for i in recent_idx
+                                           if i < len(h2h_stats[(home_team, away_team)]['weekend_games'])]
+                    recent_weekend_wins = [h2h_stats[(home_team, away_team)]['weekend_wins'][i] for i in recent_idx
+                                          if i < len(h2h_stats[(home_team, away_team)]['weekend_wins'])]
+                    
+                    weekend_games_count = sum(recent_weekend_games)
+                    if weekend_games_count > 0:
+                        weekend_win_pct = sum(recent_weekend_wins) / weekend_games_count
+                    else:
+                        weekend_win_pct = np.mean(recent_wins)  # default to overall win pct
+                
                 h2h_features_list.append({
                     'GAME_DATE': game_date,
                     'TEAM_ID_HOME': home_team,
@@ -656,8 +836,12 @@ class NBAFeatureProcessor:
                     'H2H_AVG_MARGIN': np.mean(recent_margins),
                     'H2H_STREAK': streak,
                     'H2H_HOME_ADVANTAGE': np.mean([w for i, w in enumerate(recent_wins)
-                                                 if recent_margins[i] > 0]),
-                    'H2H_MOMENTUM': momentum
+                                                 if i < len(recent_margins) and recent_margins[i] > 0]),
+                    'H2H_MOMENTUM': momentum,
+                    'H2H_STYLE_DIFF': style_diff,
+                    'H2H_WEEKEND_WIN_PCT': weekend_win_pct,
+                    'H2H_PACE_ADVANTAGE': pace_advantage,
+                    'H2H_SHOOTING_ADVANTAGE': shooting_advantage
                 })
             else:
                 h2h_features_list.append({
@@ -669,14 +853,18 @@ class NBAFeatureProcessor:
                     'H2H_AVG_MARGIN': 0,
                     'H2H_STREAK': 0,
                     'H2H_HOME_ADVANTAGE': 0,
-                    'H2H_MOMENTUM': 0.5
+                    'H2H_MOMENTUM': 0.5,
+                    'H2H_STYLE_DIFF': 0,
+                    'H2H_WEEKEND_WIN_PCT': 0.5,
+                    'H2H_PACE_ADVANTAGE': 0,
+                    'H2H_SHOOTING_ADVANTAGE': 0
                 })
 
         return pd.DataFrame(h2h_features_list)
         
     def calculate_seasonal_trends(self, games: pd.DataFrame) -> pd.DataFrame:
         """
-        Calculate seasonal trend adjustments.
+        Calculate seasonal trend adjustments with enhanced exponential decay weighting.
         
         Args:
             games: DataFrame containing merged home/away game data
@@ -684,7 +872,7 @@ class NBAFeatureProcessor:
         Returns:
             pd.DataFrame: Seasonal trend features
         """
-        print("Calculating seasonal trends...")
+        print("Calculating enhanced seasonal trends with exponential decay...")
 
         seasonal_trends = pd.DataFrame()
 
@@ -693,27 +881,52 @@ class NBAFeatureProcessor:
             season_start = games['GAME_DATE_HOME'].min()
             games['DAYS_INTO_SEASON'] = (games['GAME_DATE_HOME'] - season_start).dt.days
 
-            # Calculate rolling averages with seasonal weights
-            for window in [14, 30, 60]:
+            # Calculate rolling averages with seasonal weights for each window
+            for window in DEFAULT_LOOKBACK_WINDOWS:
                 # Apply exponential weighting based on recency
-                weights = np.exp(-np.arange(window) / (window/2))
+                # More aggressive decay for more recent games
+                decay_factor = window / 10  # Adjust decay rate based on window size
+                weights = np.exp(-np.arange(window) / decay_factor)
+                
+                # Normalize weights to sum to 1
+                weights = weights / weights.sum()
 
                 for team_type in ['HOME', 'AWAY']:
-                    # Offensive trends
-                    seasonal_trends[f'OFF_TREND_{team_type}_{window}D'] = (
+                    # Offensive trends with exponential decay
+                    seasonal_trends[f'TREND_SCORE_{team_type}_{window}D'] = (
                         games.groupby('TEAM_ID_' + team_type)['PTS_' + team_type]
-                        .rolling(window, min_periods=1)
-                        .apply(lambda x: np.average(x, weights=weights[-len(x):]))
+                        .rolling(window, min_periods=max(1, window//5))
+                        .apply(lambda x: np.average(x, weights=weights[-len(x):]) if len(x) > 0 else np.nan)
                         .reset_index(0, drop=True)
                     )
 
-                    # Defensive trends
-                    seasonal_trends[f'DEF_TREND_{team_type}_{window}D'] = (
+                    # Win trends with exponential decay (based on PLUS_MINUS as a proxy for dominance)
+                    seasonal_trends[f'TREND_WIN_{team_type}_{window}D'] = (
                         games.groupby('TEAM_ID_' + team_type)['PLUS_MINUS_' + team_type]
-                        .rolling(window, min_periods=1)
-                        .apply(lambda x: np.average(x, weights=weights[-len(x):]))
+                        .rolling(window, min_periods=max(1, window//5))
+                        .apply(lambda x: np.average(x, weights=weights[-len(x):]) if len(x) > 0 else np.nan)
                         .reset_index(0, drop=True)
                     )
+                    
+                    # Efficiency trends (points per possession proxy)
+                    if all(col in games.columns for col in [f'PTS_{team_type}', f'TOV_{team_type}', f'FGA_{team_type}']):
+                        # Calculate points per possession for each game
+                        ppp = games[f'PTS_{team_type}'] / (games[f'FGA_{team_type}'] - games[f'TOV_{team_type}'] + 0.001)
+                        
+                        seasonal_trends[f'TREND_EFF_{team_type}_{window}D'] = (
+                            games.groupby('TEAM_ID_' + team_type).apply(
+                                lambda group: pd.Series(
+                                    [
+                                        np.average(
+                                            ppp.loc[group.index][-window:], 
+                                            weights=weights[-len(ppp.loc[group.index][-window:]):],
+                                        ) if len(ppp.loc[group.index][-window:]) > 0 else np.nan
+                                        for _ in range(len(group))
+                                    ],
+                                    index=group.index
+                                )
+                            )
+                        )
 
             # Add season segment indicators
             games['SEASON_SEGMENT'] = pd.cut(
@@ -727,7 +940,11 @@ class NBAFeatureProcessor:
                 'PTS_HOME': 'mean',
                 'PTS_AWAY': 'mean',
                 'PLUS_MINUS_HOME': 'mean',
-                'PLUS_MINUS_AWAY': 'mean'
+                'PLUS_MINUS_AWAY': 'mean',
+                'FG3_PCT_HOME': 'mean',
+                'FG3_PCT_AWAY': 'mean',
+                'FG_PCT_HOME': 'mean',
+                'FG_PCT_AWAY': 'mean'
             })
 
             # Add segment adjustments
@@ -737,11 +954,27 @@ class NBAFeatureProcessor:
                         segment_stats[f'PLUS_MINUS_{team_type}']
                     )
                 )
+                
+                # Add new segment shooting adjustments
+                seasonal_trends[f'SEGMENT_SHOOTING_{team_type}'] = (
+                    games['SEASON_SEGMENT'].map(
+                        segment_stats[f'FG_PCT_{team_type}']
+                    )
+                )
+                
+                seasonal_trends[f'SEGMENT_3PT_{team_type}'] = (
+                    games['SEASON_SEGMENT'].map(
+                        segment_stats[f'FG3_PCT_{team_type}']
+                    )
+                )
 
         except Exception as e:
             print(f"Error calculating seasonal trends: {e}")
+            print(f"Error details: {str(e)}")
+            import traceback
+            traceback.print_exc()
 
-        return seasonal_trends
+        return seasonal_trends.fillna(0)
         
     def prepare_features(self, stats_df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.Series]:
         """

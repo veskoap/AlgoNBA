@@ -4,7 +4,7 @@ Constants used throughout the NBA prediction model.
 from typing import Dict, List
 
 # Default lookback windows for feature engineering
-DEFAULT_LOOKBACK_WINDOWS = [7, 14, 30, 60]
+DEFAULT_LOOKBACK_WINDOWS = [3, 5, 7, 10, 15, 20, 30, 60]
 
 # NBA team locations with coordinates and timezone information
 TEAM_LOCATIONS: Dict = {
@@ -69,7 +69,11 @@ FEATURE_GROUPS = {
     'EFF': 'Efficiency metrics',
     'MOMENTUM': 'Momentum and consistency',
     'REST': 'Rest and fatigue',
-    'H2H': 'Head-to-head matchups'
+    'H2H': 'Head-to-head matchups',
+    'MATCHUP': 'Team matchup specialization',
+    'PLAYER': 'Player impact modeling',
+    'CONTEXT': 'Contextual features',
+    'TREND': 'Historical trend features'
 }
 
 # Comprehensive feature registry for the NBA prediction system
@@ -156,13 +160,13 @@ FEATURE_REGISTRY = {
     'WIN_MOMENTUM': {
         'type': 'derived',
         'description': 'Ratio of recent to longer-term win percentage',
-        'windows': [14, 30, 60],  # Excludes smallest window
+        'windows': [5, 10, 15, 20, 30, 60],  # Excludes smallest window
         'dependencies': ['WIN_PCT_HOME', 'WIN_PCT_AWAY'],
     },
     'SCORING_MOMENTUM': {
         'type': 'derived',
         'description': 'Ratio of recent to longer-term scoring',
-        'windows': [14, 30, 60],  # Excludes smallest window
+        'windows': [5, 10, 15, 20, 30, 60],  # Excludes smallest window
         'dependencies': ['PTS_mean_HOME', 'PTS_mean_AWAY'],
     },
     
@@ -270,6 +274,110 @@ FEATURE_REGISTRY = {
         'description': 'Interaction between momentum and rest advantage',
         'windows': None,
         'dependencies': ['WIN_PCT_DIFF_30D', 'REST_DIFF'],
+    },
+    
+    # Historical trend features with exponential decay
+    'TREND_WIN_HOME': {
+        'type': 'trend',
+        'description': 'Home team win trend with exponential decay weights',
+        'windows': DEFAULT_LOOKBACK_WINDOWS,
+        'dependencies': ['WIN_mean_HOME'],
+    },
+    'TREND_WIN_AWAY': {
+        'type': 'trend',
+        'description': 'Away team win trend with exponential decay weights',
+        'windows': DEFAULT_LOOKBACK_WINDOWS,
+        'dependencies': ['WIN_mean_AWAY'],
+    },
+    'TREND_SCORE_HOME': {
+        'type': 'trend',
+        'description': 'Home team scoring trend with exponential decay weights',
+        'windows': DEFAULT_LOOKBACK_WINDOWS,
+        'dependencies': ['PTS_mean_HOME'],
+    },
+    'TREND_SCORE_AWAY': {
+        'type': 'trend',
+        'description': 'Away team scoring trend with exponential decay weights',
+        'windows': DEFAULT_LOOKBACK_WINDOWS,
+        'dependencies': ['PTS_mean_AWAY'],
+    },
+    
+    # Team matchup specialization features
+    'MATCHUP_COMPATIBILITY': {
+        'type': 'matchup',
+        'description': 'Style-based compatibility between teams',
+        'windows': None,
+        'dependencies': ['PACE_mean_HOME_30D', 'PACE_mean_AWAY_30D', 'FG3A_mean_HOME_30D', 'FG3A_mean_AWAY_30D'],
+    },
+    'MATCHUP_HISTORY_SCORE': {
+        'type': 'matchup',
+        'description': 'Team-specific historical matchup score',
+        'windows': None,
+        'dependencies': ['H2H_WIN_PCT', 'H2H_AVG_MARGIN', 'H2H_MOMENTUM'],
+    },
+    'STYLE_ADVANTAGE': {
+        'type': 'matchup',
+        'description': 'Playing style advantage metric',
+        'windows': None,
+        'dependencies': ['PACE_mean_HOME_30D', 'PACE_mean_AWAY_30D', 'FG3_PCT_mean_HOME_30D', 'FG3_PCT_mean_AWAY_30D'],
+    },
+    
+    # Player impact modeling features
+    'LINEUP_IMPACT_HOME': {
+        'type': 'player',
+        'description': 'Home team lineup impact score',
+        'windows': None,
+        'dependencies': [],
+    },
+    'LINEUP_IMPACT_AWAY': {
+        'type': 'player',
+        'description': 'Away team lineup impact score',
+        'windows': None,
+        'dependencies': [],
+    },
+    'STAR_PLAYER_MATCHUP': {
+        'type': 'player',
+        'description': 'Star player matchup advantage',
+        'windows': None,
+        'dependencies': [],
+    },
+    'LINEUP_IMPACT_DIFF': {
+        'type': 'player',
+        'description': 'Difference in lineup impact scores',
+        'windows': None,
+        'dependencies': ['LINEUP_IMPACT_HOME', 'LINEUP_IMPACT_AWAY'],
+    },
+    
+    # Advanced contextual features
+    'STADIUM_HOME_ADVANTAGE': {
+        'type': 'context',
+        'description': 'Stadium-specific home advantage factor',
+        'windows': None,
+        'dependencies': [],
+    },
+    'TRAVEL_FATIGUE': {
+        'type': 'context',
+        'description': 'Travel fatigue with time zone adjustments',
+        'windows': None,
+        'dependencies': ['TRAVEL_DISTANCE', 'TIMEZONE_DIFF'],
+    },
+    'WEEKEND_GAME': {
+        'type': 'context',
+        'description': 'Flag for weekend vs. weekday games',
+        'windows': None,
+        'dependencies': [],
+    },
+    'NATIONAL_TV': {
+        'type': 'context',
+        'description': 'Flag for nationally televised games',
+        'windows': None,
+        'dependencies': [],
+    },
+    'RIVALRY_MATCHUP': {
+        'type': 'context',
+        'description': 'Flag for rivalry matchups',
+        'windows': None,
+        'dependencies': [],
     }
 }
 
