@@ -9,8 +9,13 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 from torch.utils.data import DataLoader, TensorDataset
-from torch.amp import autocast
-from torch.cuda.amp import GradScaler
+# Handle different PyTorch versions for AMP
+try:
+    # For newer PyTorch versions
+    from torch.amp import autocast, GradScaler
+except ImportError:
+    # For older PyTorch versions
+    from torch.cuda.amp import autocast, GradScaler
 from sklearn.model_selection import TimeSeriesSplit
 from sklearn.metrics import accuracy_score, brier_score_loss, roc_auc_score
 from typing import List, Tuple, Dict, Any, Optional, Union
@@ -719,8 +724,9 @@ class EnhancedDeepModelTrainer:
 
             # Initialize mixed precision training (if enabled)
             if self.use_amp and torch.cuda.is_available():
-                # Use updated constructor to avoid deprecation warning
-                scaler = GradScaler(device_type='cuda')
+                # Create GradScaler without any parameters to ensure compatibility
+                print("Initializing GradScaler for mixed precision training")
+                scaler = GradScaler()
             else:
                 scaler = None
             
@@ -782,7 +788,7 @@ class EnhancedDeepModelTrainer:
                     
                     # Forward pass with mixed precision (if enabled)
                     if scaler is not None:
-                        with autocast(device_type='cuda' if torch.cuda.is_available() else 'cpu'):
+                        with autocast():
                             outputs = model(inputs)
                             loss = criterion(outputs, targets)
                         
@@ -1182,7 +1188,7 @@ class EnhancedDeepModelTrainer:
                     
                     # Forward pass with mixed precision if available
                     if self.use_amp and torch.cuda.is_available():
-                        with autocast(device_type='cuda' if torch.cuda.is_available() else 'cpu'):
+                        with autocast():
                             outputs = model(inputs)
                     else:
                         outputs = model(inputs)
@@ -1238,7 +1244,7 @@ class EnhancedDeepModelTrainer:
                 
                 # Forward pass with mixed precision if available
                 if self.use_amp and torch.cuda.is_available():
-                    with autocast(device_type='cuda' if torch.cuda.is_available() else 'cpu'):
+                    with autocast():
                         outputs = model(inputs)
                 else:
                     outputs = model(inputs)
@@ -1404,7 +1410,7 @@ class EnhancedDeepModelTrainer:
                         
                         # Forward pass with mixed precision if available
                         if self.use_amp and torch.cuda.is_available():
-                            with autocast(device_type='cuda' if torch.cuda.is_available() else 'cpu'):
+                            with autocast():
                                 outputs = model(inputs)
                         else:
                             outputs = model(inputs)
