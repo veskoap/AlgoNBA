@@ -7,7 +7,7 @@ import joblib
 import pandas as pd
 import numpy as np
 from typing import List, Dict, Tuple, Optional, Union, Set
-import datetime
+from datetime import datetime, date, timedelta
 
 from src.data.data_loader import NBADataLoader
 from src.features.feature_processor import NBAFeatureProcessor
@@ -813,17 +813,17 @@ class EnhancedNBAPredictor:
             away_team_abbrev = TEAM_ID_TO_ABBREV.get(away_team_id, str(away_team_id))
             
             # Create a mock prediction with 50% probability
-            import datetime
+            from datetime import datetime, date
             mock_result = {
                 'home_team_id': home_team_id,
                 'away_team_id': away_team_id,
                 'home_team': home_team_abbrev,
                 'away_team': away_team_abbrev,
-                'game_date': game_date or datetime.date.today().isoformat(),
+                'game_date': game_date or date.today().isoformat(),
                 'home_win_probability': 0.5,  # Default 50% for mock
                 'confidence': 0.4,  # Lower confidence for mock prediction
                 'model_type': model_type + " (mock)",
-                'prediction_time': datetime.datetime.now().isoformat(),
+                'prediction_time': datetime.now().isoformat(),
                 'is_mock': True
             }
             
@@ -859,7 +859,7 @@ class EnhancedNBAPredictor:
             'home_win_probability': float(probs[0]),
             'confidence': float(confidence[0]),
             'model_type': model_type,
-            'prediction_time': datetime.datetime.now().isoformat()
+            'prediction_time': datetime.now().isoformat()
         }
         
         # Cache the prediction
@@ -890,7 +890,7 @@ class EnhancedNBAPredictor:
             str: Path to the saved model directory
         """
         # Create save directory if it doesn't exist
-        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         save_dir = os.path.join(directory, f"nba_model_{timestamp}")
         os.makedirs(save_dir, exist_ok=True)
         
