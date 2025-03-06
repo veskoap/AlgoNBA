@@ -6,6 +6,14 @@ AlgoNBA is a sophisticated machine learning system designed to predict the outco
 
 The system has been optimized for both accuracy and computational efficiency, with specialized GPU acceleration for Google Colab A100 environments, allowing full training in under 10 minutes on high-performance hardware while maintaining compatibility with standard hardware.
 
+### Recent Enhancements
+
+- **Advanced Caching System**: Added robust data, feature, and model caching to dramatically speed up repeated runs
+- **Google Drive Integration**: Improved Colab experience with Drive-based cache persistence
+- **Cross-Platform Optimization**: Enhanced support for Apple Silicon, CUDA, and standard hardware
+- **Mock Model Support**: Graceful degradation when running with insufficient data
+- **Memory Management**: Resolved DataFrame fragmentation issues for better performance
+
 ## Technology Stack
 
 - **Machine Learning**: XGBoost, LightGBM, PyTorch, scikit-learn
@@ -396,6 +404,50 @@ python main.py --cache-dir /path/to/custom/cache
 | `--no-hardware-optimization` | Disable hardware-specific optimizations (M1, CUDA, etc.) |
 | `--colab-drive` | Use Google Drive for storage when in Colab environment |
 
+### Caching System
+
+The enhanced caching system provides substantial performance improvements:
+
+#### Cache Types
+
+| Cache Type | Description | Typical Size | Invalidation |
+|------------|-------------|--------------|-------------|
+| `games` | Raw NBA game data from API | 10-50MB | 30 days |
+| `features` | Processed feature matrices | 50-200MB | 30 days |
+| `models` | Trained ML models | 100-500MB | 30 days |
+| `predictions` | Game prediction results | <1MB | 1 day |
+
+#### Cache Commands
+
+```bash
+# View cache status, size, and statistics
+python main.py --cache-action status
+
+# Clear specific cache types
+python main.py --cache-action clear_type --cache-type features
+python main.py --cache-action clear_type --cache-type models
+
+# Clear all cache data
+python main.py --cache-action clear_all
+
+# Disable cache for a single run
+python main.py --no-cache
+
+# Use a custom cache directory
+python main.py --cache-dir /path/to/custom/cache
+
+# In Google Colab, use Drive for persistent cache
+python main.py --colab-drive
+```
+
+#### Cache Benefits
+
+- **Speed**: Up to 90% faster subsequent runs after initial caching
+- **Offline Operation**: Run without internet after initial data fetch
+- **Iterative Development**: Quickly test changes without full retraining
+- **Cross-Session Persistence**: Maintain data between Colab sessions with Drive integration
+- **Automatic Cleanup**: Time-based invalidation prevents stale data
+
 ### Quick Mode Details
 
 The `--quick` flag enables a faster testing mode that:
@@ -421,6 +473,35 @@ The system now automatically detects and optimizes for different hardware:
 - Special optimizations for A100 GPUs (TF32 precision)
 - Optimized cuDNN settings for faster convolutions
 
+### Graceful Degradation with Limited Data
+
+The system now includes robust fallback mechanisms for scenarios with limited data:
+
+#### Mock Prediction Mode
+- When NBA data can't be fetched or is insufficient:
+  - Generates reasonable placeholder predictions
+  - Provides appropriate confidence scores
+  - Clearly identifies predictions as mock data
+
+#### Minimal Data Requirements
+- Full training: 500+ games recommended
+- Basic functionality: 100+ games
+- Demo mode: Works even with no real data
+
+#### Feature Engineering Robustness
+- Automatically handles missing data columns
+- Gracefully works with either GAME_DATE or GAME_DATE_HOME formats
+- Prevents DataFrame fragmentation for better memory usage
+
+#### Diagnostic Tools
+```bash
+# Clear cache to test with fresh data
+python main.py --cache-action clear_all
+
+# Run with detailed logging
+python main.py --verbose
+```
+
 #### Google Colab Integration
 
 For optimal performance on Google Colab:
@@ -441,6 +522,53 @@ For optimal performance on Google Colab:
 
 # Check cache statistics 
 !python main.py --colab-drive --cache-action status
+
+# Clear existing cache to force fresh data loading
+!python main.py --colab-drive --cache-action clear_all
+
+# Run with fresh data but save cache to Drive
+!python main.py --colab-drive
+```
+
+#### Enhanced Google Colab Integration
+
+The system provides specialized support for Google Colab environments:
+
+1. **Automatic Environment Detection**:
+   - Identifies Colab runtime
+   - Detects GPU type (A100, V100, T4, etc.)
+   - Configures appropriate optimizations
+
+2. **Google Drive Integration**:
+   - Automatically mounts Drive when using `--colab-drive`
+   - Creates persistent directories:
+     - `/content/drive/MyDrive/AlgoNBA/cache` - For cached data
+     - `/content/drive/MyDrive/AlgoNBA/models` - For saved models
+   - Handles path translation between Colab and Drive
+
+3. **A100-Specific Optimizations**:
+   - Enables TF32 precision (faster than FP32, more accurate than FP16)
+   - Increases batch sizes automatically for high-RAM environments
+   - Configures optimal thread counts and worker processes
+
+4. **Recovery Mechanisms**:
+   - Handles Drive mount failures gracefully
+   - Falls back to session storage when needed
+   - Provides detailed diagnostics for troubleshooting
+
+Example Colab notebook setup:
+
+```python
+# Install dependencies
+!pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
+!pip install xgboost lightgbm scikit-learn pandas numpy nba_api joblib tqdm
+
+# Clone repository
+!git clone https://github.com/yourusername/AlgoNBA.git
+%cd AlgoNBA
+
+# Mount Drive and run
+!python main.py --colab-drive --save-models
 ```
 
 The `--colab-drive` flag provides:
@@ -715,12 +843,13 @@ Areas for future enhancement:
    - TensorRT integration for inference optimization
    - Serverless deployment architecture
    
-4. **Caching System Enhancements**:
+4. **Advanced Cache System Improvements**:
+   - More intelligent cache invalidation strategies
+   - Partial cache updates (update only stale components)
    - Distributed cache with Redis backend
-   - Incremental updates to cached data
-   - Delta compression for large datasets
-   - Cloud storage integration (S3, GCS)
-   - Automatic cache invalidation strategies
+   - Compressed storage for reduced footprint
+   - Cloud storage integration beyond Google Drive (S3, Azure, etc.)
+   - Database backend option for enterprise deployment
 
 ## License
 
