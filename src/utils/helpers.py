@@ -4,11 +4,30 @@ Helper functions used throughout the NBA prediction model.
 import pandas as pd
 import numpy as np
 import pytz
+import warnings
 from typing import Dict, Tuple
 from datetime import datetime
 from geopy.distance import geodesic
 
 from src.utils.constants import TEAM_LOCATIONS, TEAM_ID_TO_ABBREV
+
+
+def suppress_sklearn_warnings():
+    """
+    Suppress common sklearn deprecation warnings.
+    Call this function at the beginning of scripts to avoid warning spam.
+    """
+    # Suppress force_all_finite deprecation warnings
+    warnings.filterwarnings('ignore', message='.*force_all_finite.*', 
+                          category=FutureWarning, module='sklearn.*')
+    
+    # Suppress other common sklearn warnings
+    warnings.filterwarnings('ignore', message='.*valid_leaf_size.*', 
+                          category=FutureWarning, module='sklearn.*')
+    warnings.filterwarnings('ignore', message='.*n_features_in_.*', 
+                          category=FutureWarning, module='sklearn.*')
+    
+    # Add more patterns as needed
 
 
 def safe_divide(a, b, fill_value=0, index=None):

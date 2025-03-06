@@ -31,7 +31,15 @@ Example usage:
 import sys
 import pandas as pd
 import argparse
+import warnings
 from src.predictor import EnhancedNBAPredictor
+from src.utils.helpers import suppress_sklearn_warnings
+
+# Suppress all sklearn warnings before any imports
+suppress_sklearn_warnings()
+
+# Also add a broader warning filter for other FutureWarnings
+warnings.filterwarnings("ignore", category=FutureWarning)
 
 
 def main():

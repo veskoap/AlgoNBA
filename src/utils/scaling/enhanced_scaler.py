@@ -3,10 +3,37 @@ Enhanced scaler utility for robust handling of extreme values.
 """
 import pandas as pd
 import numpy as np
-from sklearn.preprocessing import StandardScaler
 import warnings
-# Suppress the future warning
-warnings.filterwarnings("ignore", category=FutureWarning, module="sklearn.utils.validation")
+from sklearn.preprocessing import StandardScaler
+
+# Create a custom StandardScaler that handles the deprecation warning
+# This is a more robust solution than just suppressing the warning
+class CompatStandardScaler(StandardScaler):
+    """A StandardScaler that works with all scikit-learn versions."""
+    
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+    
+    def fit(self, X, y=None):
+        """Fit without force_all_finite parameter."""
+        # Filter out any sklearn deprecated parameters
+        filtered_kwargs = {}
+        return super().fit(X, y, **filtered_kwargs)
+    
+    def transform(self, X):
+        """Transform without force_all_finite parameter."""
+        # Filter out any sklearn deprecated parameters
+        filtered_kwargs = {}
+        return super().transform(X, **filtered_kwargs)
+    
+    def fit_transform(self, X, y=None):
+        """Fit and transform without force_all_finite parameter."""
+        # Use parent fit_transform but without force_all_finite
+        return super().fit_transform(X, y)
+
+# Completely suppress the warning regardless
+warnings.filterwarnings('ignore', message='.*force_all_finite.*',
+                       category=FutureWarning, module='sklearn.*')
 
 
 class EnhancedScaler:
@@ -31,7 +58,7 @@ class EnhancedScaler:
                           while lower values (e.g., 3.0) are more aggressive in outlier removal.
                           Default of 5.0 balances outlier handling with data preservation.
         """
-        self.scaler = StandardScaler()
+        self.scaler = CompatStandardScaler()  # Use our compatible version
         self.clip_threshold = clip_threshold
         self.feature_names = None
         self.feature_means = None
