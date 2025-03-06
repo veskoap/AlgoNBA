@@ -9,7 +9,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 from torch.utils.data import DataLoader, TensorDataset
-from torch.cuda.amp import autocast, GradScaler
+from torch.amp import autocast
+from torch.cuda.amp import GradScaler
 from sklearn.model_selection import TimeSeriesSplit
 from sklearn.metrics import accuracy_score, brier_score_loss, roc_auc_score
 from typing import List, Tuple, Dict, Any, Optional, Union
@@ -724,7 +725,7 @@ class EnhancedDeepModelTrainer:
                     
                     # Forward pass with mixed precision (if enabled)
                     if scaler is not None:
-                        with autocast():
+                        with autocast(device_type='cuda'):
                             outputs = model(inputs)
                             loss = criterion(outputs, targets)
                         
@@ -925,6 +926,7 @@ class EnhancedDeepModelTrainer:
     def _prepare_aligned_features(self, X: pd.DataFrame, scaler, fold_idx: int) -> pd.DataFrame:
         """
         Prepare and align features for prediction, handling missing and derived features.
+        Handles NaN values and ensures feature validity.
         
         Args:
             X: Input DataFrame
@@ -1016,6 +1018,7 @@ class EnhancedDeepModelTrainer:
     def _scale_features(self, X: pd.DataFrame, scaler, fold_idx: int) -> np.ndarray:
         """
         Scale features using the appropriate scaler with error handling.
+        Includes NaN checking and handling.
         
         Args:
             X: DataFrame with aligned features
@@ -1025,19 +1028,49 @@ class EnhancedDeepModelTrainer:
         Returns:
             np.ndarray: Scaled features ready for model input
         """
+        # Check for NaN values before scaling
+        if X.isna().any().any():
+            if fold_idx == 0:  # Only print for first fold
+                print(f"Warning: NaN values detected in input data. Filling with appropriate values.")
+            
+            # Fill NaNs with appropriate values based on column type
+            for col in X.columns:
+                if 'PCT' in col or 'PROBABILITY' in col or 'H2H_' in col:
+                    # Probability columns get filled with 0.5
+                    X[col] = X[col].fillna(0.5)
+                else:
+                    # Other columns get filled with 0
+                    X[col] = X[col].fillna(0)
+        
         try:
             if isinstance(scaler, EnhancedScaler):
                 # Use enhanced scaler directly
-                return scaler.transform(X)
+                scaled_data = scaler.transform(X)
             else:
                 # For backward compatibility
-                return scaler.transform(X)
+                scaled_data = scaler.transform(X)
+                
+            # Check for NaN values after scaling
+            if np.isnan(scaled_data).any():
+                if fold_idx == 0:  # Only print for first fold
+                    print(f"Warning: NaN values found after scaling. Replacing with zeros.")
+                # Replace NaNs with zeros
+                scaled_data = np.nan_to_num(scaled_data, nan=0.0)
+                
+            return scaled_data
+            
         except Exception as e:
             if fold_idx == 0:  # Only print for first fold
                 print(f"Warning: Scaling error in deep model: {e}")
             # Create an enhanced scaler and use it as fallback
             fallback_scaler = EnhancedScaler()
-            return fallback_scaler.fit_transform(X)
+            scaled_data = fallback_scaler.fit_transform(X)
+            
+            # Check for NaNs in fallback result
+            if np.isnan(scaled_data).any():
+                scaled_data = np.nan_to_num(scaled_data, nan=0.0)
+                
+            return scaled_data
     
     def _run_mc_dropout_prediction(self, model, X_scaled: np.ndarray, mc_samples: int, batch_size: int) -> np.ndarray:
         """
@@ -1137,7 +1170,7 @@ class EnhancedDeepModelTrainer:
                 
                 # Forward pass with mixed precision if available
                 if self.use_amp and torch.cuda.is_available():
-                    with autocast():
+                    with autocast(device_type='cuda'):
                         outputs = model(inputs)
                 else:
                     outputs = model(inputs)
@@ -1296,7 +1329,7 @@ class EnhancedDeepModelTrainer:
                         
                         # Forward pass with mixed precision if available
                         if self.use_amp and torch.cuda.is_available():
-                            with autocast():
+                            with autocast(device_type='cuda'):
                                 outputs = model(inputs)
                         else:
                             outputs = model(inputs)

@@ -4,6 +4,9 @@ Enhanced scaler utility for robust handling of extreme values.
 import pandas as pd
 import numpy as np
 from sklearn.preprocessing import StandardScaler
+import warnings
+# Suppress FutureWarning about force_all_finite
+warnings.filterwarnings("ignore", category=FutureWarning, module="sklearn.utils.validation")
 
 
 class EnhancedScaler:
