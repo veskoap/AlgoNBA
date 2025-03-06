@@ -535,21 +535,27 @@ class NBAFeatureProcessor:
             rolling_stats['STREAK'] = streak_lengths.reset_index()['WIN']
             
             # Add weekend performance metrics
-            weekend_data = team_games[team_games['IS_WEEKEND'] == 1].sort_values(['TEAM_ID', 'GAME_DATE']).groupby('TEAM_ID')
-            if not weekend_data.empty:
+            weekend_games = team_games[team_games['IS_WEEKEND'] == 1]
+            if not weekend_games.empty:
+                weekend_data = weekend_games.sort_values(['TEAM_ID', 'GAME_DATE']).groupby('TEAM_ID')
                 weekend_win_pct = weekend_data['WIN'].mean().reset_index()
                 weekend_win_pct.columns = ['TEAM_ID', 'WEEKEND_WIN_PCT']
                 
-                # Merge with rolling_stats
-                rolling_stats = pd.merge(
-                    rolling_stats.reset_index(),
-                    weekend_win_pct,
-                    on='TEAM_ID',
-                    how='left'
-                ).set_index(['TEAM_ID', 'GAME_DATE'])
-                
-                # Fill NaN values with overall win percentage
-                rolling_stats['WEEKEND_WIN_PCT'].fillna(rolling_stats['WIN_mean'], inplace=True)
+                # Check if we have any weekend data after grouping
+                if not weekend_win_pct.empty:
+                    # Merge with rolling_stats
+                    rolling_stats = pd.merge(
+                        rolling_stats,
+                        weekend_win_pct,
+                        on='TEAM_ID',
+                        how='left'
+                    )
+                    
+                    # Fill NaN values with overall win percentage
+                    rolling_stats['WEEKEND_WIN_PCT'].fillna(rolling_stats['WIN_mean'], inplace=True)
+                else:
+                    # If no weekend data available, use overall win percentage
+                    rolling_stats['WEEKEND_WIN_PCT'] = rolling_stats['WIN_mean']
             else:
                 # If no weekend data available, use overall win percentage
                 rolling_stats['WEEKEND_WIN_PCT'] = rolling_stats['WIN_mean']
