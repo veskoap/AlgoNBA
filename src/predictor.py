@@ -26,7 +26,8 @@ class EnhancedNBAPredictor:
     def __init__(self, seasons: List[str], lookback_windows: List[int] = None, 
                 use_enhanced_models: bool = True, quick_mode: bool = False,
                 use_cache: bool = True, cache_max_age_days: int = 30,
-                cache_dir: str = None, hardware_optimization: bool = True):
+                cache_dir: str = None, hardware_optimization: bool = True,
+                selective_cache_components: Dict[str, bool] = None):
         """
         Initialize the NBA prediction system.
         
@@ -51,6 +52,9 @@ class EnhancedNBAPredictor:
             cache_dir: Custom directory for cache storage (if None, will auto-detect)
             hardware_optimization: Whether to apply hardware-specific optimizations
                                   (M1/Apple Silicon, CUDA, etc.)
+            selective_cache_components: Dictionary defining which components should use cache.
+                                       Example: {'data': True, 'features': False, 'models': False}
+                                       If None, all components follow use_cache setting.
         """
         self.seasons = seasons
         self.lookback_windows = lookback_windows or DEFAULT_LOOKBACK_WINDOWS
@@ -66,12 +70,25 @@ class EnhancedNBAPredictor:
         from src.utils.cache_manager import CacheManager
         self.cache_manager = CacheManager(cache_dir=cache_dir)
         
+        # Set up selective caching if provided
+        default_cache_state = use_cache
+        self.selective_cache = selective_cache_components or {
+            'data': default_cache_state,
+            'features': default_cache_state,
+            'models': default_cache_state,
+            'predictions': default_cache_state
+        }
+        
         # Auto-detect and configure hardware optimizations if requested
         if hardware_optimization:
             self._configure_hardware_optimizations()
         
-        # Initialize components with caching support - pass the same cache_dir
-        self.data_loader = NBADataLoader(use_cache=use_cache, cache_max_age_days=cache_max_age_days, cache_dir=cache_dir)
+        # Initialize components with selective caching support
+        self.data_loader = NBADataLoader(
+            use_cache=self.selective_cache.get('data', use_cache), 
+            cache_max_age_days=cache_max_age_days, 
+            cache_dir=cache_dir
+        )
         self.feature_processor = NBAFeatureProcessor(self.lookback_windows)
         self.player_processor = PlayerAvailabilityProcessor()
         
@@ -216,8 +233,8 @@ class EnhancedNBAPredictor:
         
     def fetch_and_process_data(self) -> None:
         """Fetch NBA data and process it into features."""
-        # Check for cached processed features first
-        if self.use_cache:
+        # Check for cached processed features first when features caching is enabled
+        if self.use_cache and self.selective_cache.get('features', True):
             cache_params = {
                 'config_hash': self.config_hash,
                 'lookback_windows': sorted(self.lookback_windows),
@@ -271,8 +288,8 @@ class EnhancedNBAPredictor:
         }
         self.features = pd.concat([self.features, pd.DataFrame(additional_cols, index=self.features.index)], axis=1)
         
-        # Cache the processed features
-        if self.use_cache:
+        # Cache the processed features if feature caching is enabled
+        if self.use_cache and self.selective_cache.get('features', True):
             cache_params = {
                 'config_hash': self.config_hash,
                 'lookback_windows': sorted(self.lookback_windows),
@@ -323,8 +340,8 @@ class EnhancedNBAPredictor:
                 print("Created mock models due to insufficient training data")
                 return
         
-        # Check for cached trained models
-        if self.use_cache:
+        # Check for cached trained models when model caching is enabled
+        if self.use_cache and self.selective_cache.get('models', True):
             # Create cache params based on feature data and model config
             model_cache_params = {
                 'config_hash': self.config_hash,
@@ -366,8 +383,8 @@ class EnhancedNBAPredictor:
             print("\nTraining deep learning model...")
             self.deep_model_trainer.train_deep_model(self.features)
         
-        # Cache the trained models
-        if self.use_cache:
+        # Cache the trained models when model caching is enabled
+        if self.use_cache and self.selective_cache.get('models', True):
             model_cache_params = {
                 'config_hash': self.config_hash,
                 'feature_hash': self._get_feature_hash(),

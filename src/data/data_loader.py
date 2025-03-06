@@ -64,10 +64,66 @@ class NBADataLoader:
         
         self.cache_manager = CacheManager(cache_dir=cache_dir)
     
+    def _fetch_bulk_seasons(self, seasons: List[str]) -> Optional[pd.DataFrame]:
+        """
+        Attempt to fetch multiple seasons in a single bulk API call.
+        This is much faster than fetching each season individually.
+        
+        Args:
+            seasons: List of NBA seasons in format 'YYYY-YY'
+            
+        Returns:
+            DataFrame with game data or None if bulk fetch fails
+        """
+        try:
+            print(f"Attempting bulk fetch for {len(seasons)} seasons...")
+            # For bulk fetch with multiple seasons, we'll need to fetch more broadly
+            # and then filter to our target seasons
+            
+            # Use a more optimized approach: get all data for recent years, then filter
+            games = leaguegamefinder.LeagueGameFinder(
+                season_type_nullable='Regular Season',
+                league_id_nullable='00'  # NBA league ID
+            ).get_data_frames()[0]
+            
+            # Parse season from date
+            # Function to extract season from game date
+            def get_season(date_str):
+                date = pd.to_datetime(date_str)
+                year = date.year
+                month = date.month
+                # NBA season spans two years, with Oct-Dec being part of the later year's season
+                if month >= 10:  # Oct-Dec
+                    return f"{year}-{str(year+1)[-2:]}"
+                else:  # Jan-June
+                    return f"{year-1}-{str(year)[-2:]}"
+            
+            # Apply the function to get seasons
+            games['SEASON'] = games['GAME_DATE'].apply(get_season)
+            
+            # Filter to only include the requested seasons
+            filtered_games = games[games['SEASON'].isin(seasons)].copy()
+            
+            # Clean up
+            if 'SEASON' in filtered_games.columns:
+                filtered_games.drop('SEASON', axis=1, inplace=True)
+            
+            if len(filtered_games) > 0:
+                print(f"Bulk fetch successful: retrieved {len(filtered_games)} games across requested seasons")
+                return filtered_games
+            else:
+                print("Bulk fetch returned no games for the requested seasons")
+                return None
+            
+        except Exception as e:
+            print(f"Bulk fetch failed: {str(e)}")
+            return None
+    
     def fetch_games(self, seasons: List[str]) -> Tuple[pd.DataFrame, Dict]:
         """
         Fetch NBA games data with detailed statistics and advanced metrics.
         Uses cache when available to avoid redundant API calls.
+        With performance optimizations for A100 GPU environments.
         
         Args:
             seasons: List of NBA seasons in format 'YYYY-YY'
@@ -75,10 +131,10 @@ class NBADataLoader:
         Returns:
             tuple: (games_df, advanced_metrics_dict)
         """
-        # Create cache key parameters
+        # Create cache key parameters with updated version for new optimized approach
         cache_params = {
             'seasons': sorted(seasons),
-            'api_version': '1.0'  # Track API version for cache invalidation
+            'api_version': '1.1'  # Increased to reflect optimized fetching strategy
         }
         
         # Check for cached data
@@ -94,7 +150,37 @@ class NBADataLoader:
                 
             print("No valid cache found. Fetching fresh data...")
         
-        print("Fetching basic game data...")
+        # First try bulk fetching all seasons at once
+        try:
+            bulk_games = self._fetch_bulk_seasons(seasons)
+            if bulk_games is not None and len(bulk_games) > 0:
+                # Process bulk data
+                bulk_games['GAME_DATE'] = pd.to_datetime(bulk_games['GAME_DATE'])
+                
+                # Fetch advanced metrics in parallel to save time
+                print("Fetching advanced metrics in parallel...")
+                advanced_metrics = self._fetch_advanced_metrics_parallel(seasons)
+                
+                # Split into home/away
+                home = bulk_games[bulk_games['MATCHUP'].str.contains('vs')].copy()
+                away = bulk_games[bulk_games['MATCHUP'].str.contains('@')].copy()
+                
+                # Continue with normal processing
+                processed_games = self._process_home_away_games(home, away)
+                
+                # Cache the result
+                if self.use_cache:
+                    cache_data = (processed_games, advanced_metrics)
+                    self.cache_manager.set_cache('games', cache_params, cache_data)
+                    print(f"Cached {len(processed_games)} games for {len(seasons)} seasons")
+                
+                return processed_games, advanced_metrics
+                
+        except Exception as e:
+            print(f"Error in bulk processing: {e}")
+            print("Falling back to individual season fetching...")
+        
+        print("Fetching basic game data season by season...")
         all_games = []
         advanced_metrics = {}
         
@@ -140,7 +226,8 @@ class NBADataLoader:
                     print(f"Cached {len(games)} games for season {season}")
                 
                 all_games.append(games)
-                time.sleep(1)  # Respect API rate limits
+                # Reduced sleep time for faster API calls - 0.25 seconds is usually enough
+                time.sleep(0.25)  # Minimal rate limit respect
             
             except Exception as e:
                 print(f"Error fetching data for season {season}: {e}")
@@ -265,7 +352,7 @@ class NBADataLoader:
                 self.cache_manager.set_cache('metrics', cache_params, metrics)
                 print(f"Cached advanced metrics for {season}")
                 
-            time.sleep(1)  # Respect API rate limits
+            time.sleep(0.25)  # Reduced sleep time for faster execution
             return metrics
 
         except ImportError:
@@ -453,7 +540,7 @@ class NBADataLoader:
                             'USG_PCT': player.get('USG_PCT', 0)
                         }
                     
-                    time.sleep(2)  # Respect API rate limits
+                    time.sleep(0.5)  # Reduced sleep time for faster execution
                 except Exception as e:
                     print(f"Error fetching league-wide stats: {e}")
                 
@@ -757,7 +844,7 @@ class NBADataLoader:
                             'STAR_MATCHUP_ADVANTAGE': -star_matchup_advantage
                         })
                     
-                    time.sleep(0.5)  # Reduced sleep time to process more games
+                    time.sleep(0.1)  # Minimal sleep time for much faster execution
                     
                 except Exception as e:
                     print(f"Error processing availability for game {game_id}: {e}")

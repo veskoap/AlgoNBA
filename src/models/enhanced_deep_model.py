@@ -515,14 +515,25 @@ class EnhancedDeepModelTrainer:
             prefetch_factor: Number of batches to prefetch in DataLoader.
             num_workers: Number of worker processes for data loading.
         """
-        # Increase batch size for A100 GPU when available
+        # Enhanced batch size settings for A100 GPU 
         if torch.cuda.is_available():
             device_name = torch.cuda.get_device_name(0)
-            # Check if we have A100 and n_folds > 2 (not quick mode)
-            if "A100" in device_name and n_folds > 2:
+            if "A100" in device_name:
+                # A100-specific optimizations
                 original_batch = batch_size
-                batch_size = max(128, batch_size * 2)
-                print(f"A100 detected with full model: Increasing batch size from {original_batch} to {batch_size}")
+                
+                # Much more aggressive batch size for A100
+                if n_folds > 2:  # Full model
+                    batch_size = max(256, batch_size * 4)  # 4x larger batches for full models
+                else:  # Quick mode
+                    batch_size = max(128, batch_size * 2)  # 2x larger for quick mode
+                    
+                print(f"A100 detected: Significantly increasing batch size from {original_batch} to {batch_size}")
+                
+                # Additional A100 performance tweaks
+                if not use_amp:
+                    print("Enabling automatic mixed precision for A100 GPU")
+                    use_amp = True
         
         # Store modified batch size        
         self.batch_size = batch_size
@@ -762,20 +773,41 @@ class EnhancedDeepModelTrainer:
             for epoch in range(self.epochs):
                 # Force CUDA memory allocation at the beginning of each epoch if on GPU
                 if torch.cuda.is_available() and epoch == 0:
-                    print("Forcing initial GPU memory allocation...")
-                    # Create a much larger dummy batch to ensure substantial GPU memory allocation
-                    # For A100, we can use a larger batch size
-                    large_batch_size = max(self.batch_size * 4, 128)
-                    print(f"Using large batch of {large_batch_size} for initialization")
+                    print("Optimizing initial GPU memory allocation...")
                     
-                    # Create a larger batch and move it to GPU
-                    dummy_input = torch.zeros(large_batch_size, X_train.shape[1], device=self.device)
-                    dummy_out = model(dummy_input)
+                    # Detect A100 GPU and set specialized parameters
+                    is_a100 = torch.cuda.is_available() and "A100" in torch.cuda.get_device_name(0)
                     
-                    # Create multiple batches to force memory usage
-                    for i in range(3):  # Use more batches for non-quick mode
-                        dummy_input2 = torch.randn(large_batch_size, X_train.shape[1], device=self.device)
-                        model(dummy_input2)
+                    # For A100, use much larger batches and more aggressive memory pre-allocation
+                    if is_a100:
+                        # A100 has more memory, use very large batches for pre-allocation
+                        large_batch_size = max(self.batch_size * 8, 512)
+                        print(f"A100 detected: Using extra-large batch of {large_batch_size} for optimized initialization")
+                        
+                        # Create multiple large batches to properly utilize A100 memory
+                        dummy_input = torch.zeros(large_batch_size, X_train.shape[1], device=self.device)
+                        with torch.cuda.amp.autocast(enabled=self.use_amp):
+                            dummy_out = model(dummy_input)
+                        
+                        # Force more memory allocation with multiple batches
+                        print("Priming GPU memory for optimal performance...")
+                        for i in range(5):  # More batches for A100
+                            dummy_input2 = torch.randn(large_batch_size, X_train.shape[1], device=self.device)
+                            with torch.cuda.amp.autocast(enabled=self.use_amp):
+                                model(dummy_input2)
+                    else:
+                        # For other GPUs, use smaller batch sizes
+                        large_batch_size = max(self.batch_size * 4, 128)
+                        print(f"Using large batch of {large_batch_size} for initialization")
+                        
+                        # Create a larger batch and move it to GPU
+                        dummy_input = torch.zeros(large_batch_size, X_train.shape[1], device=self.device)
+                        dummy_out = model(dummy_input)
+                        
+                        # Create multiple batches to force memory usage
+                        for i in range(3):  # Fewer batches for non-A100
+                            dummy_input2 = torch.randn(large_batch_size, X_train.shape[1], device=self.device)
+                            model(dummy_input2)
                     
                     # Clean up
                     del dummy_input, dummy_out, dummy_input2

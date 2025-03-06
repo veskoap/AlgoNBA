@@ -84,6 +84,10 @@ def main():
                       help='Disable the cache system. By default, the system caches data, features, '
                            'and predictions to speed up subsequent runs. Use this flag to always '
                            'fetch and process fresh data.')
+    parser.add_argument('--selective-cache', choices=['data', 'features', 'models', 'all'], default=None,
+                      help='Selectively enable caching for specific components while ignoring others. '
+                           'Useful with --no-cache to only refresh certain parts of the pipeline. '
+                           'Example: --no-cache --selective-cache data (will use cached raw data but refresh features/models).')
     parser.add_argument('--cache-action', choices=['status', 'clear_type', 'clear_all'],
                       help='Perform cache management actions: get cache status, clear specific '
                            'cache type, or clear all cache.')
@@ -103,7 +107,33 @@ def main():
     
     # Determine whether to use cache and hardware optimizations
     use_cache = not args.no_cache
-    cache_status = "disabled" if args.no_cache else "enabled"
+    selective_cache = args.selective_cache
+    
+    # Handle selective caching (allows parts of the system to use cache while others don't)
+    cache_components = {
+        'data': use_cache,
+        'features': use_cache,
+        'models': use_cache,
+        'predictions': use_cache
+    }
+    
+    # If selective caching is enabled, modify the cache settings
+    if args.no_cache and selective_cache:
+        if selective_cache == 'all':
+            # Enable all caches despite --no-cache
+            cache_components = {k: True for k in cache_components}
+        else:
+            # Default to disabled for all components when --no-cache is used
+            cache_components = {k: False for k in cache_components}
+            # Enable only the selected component
+            cache_components[selective_cache] = True
+    
+    # Status reporting
+    if args.no_cache and selective_cache:
+        cache_status = f"partially enabled (only {selective_cache})"
+    else:
+        cache_status = "disabled" if args.no_cache else "enabled"
+    
     hw_optimization = not args.no_hardware_optimization
     hw_status = "disabled" if args.no_hardware_optimization else "enabled"
     cache_dir = args.cache_dir
@@ -192,14 +222,31 @@ def main():
         # Initialize a new predictor with specified settings
         print(f"Starting NBA prediction system with {model_type} models...")
         print(f"Cache system {cache_status}, Hardware optimizations {hw_status}.")
-        predictor = EnhancedNBAPredictor(
-            seasons=args.seasons,
-            use_enhanced_models=use_enhanced,
-            quick_mode=args.quick,
-            use_cache=use_cache,
-            cache_dir=cache_dir,
-            hardware_optimization=hw_optimization
-        )
+        
+        # Pass selective cache components if enabled
+        if args.no_cache and selective_cache:
+            print(f"Using selective caching: {'data' if cache_components['data'] else 'no data'}, "
+                 f"{'features' if cache_components['features'] else 'no features'}, "
+                 f"{'models' if cache_components['models'] else 'no models'}")
+            predictor = EnhancedNBAPredictor(
+                seasons=args.seasons,
+                use_enhanced_models=use_enhanced,
+                quick_mode=args.quick,
+                use_cache=use_cache,
+                cache_dir=cache_dir,
+                hardware_optimization=hw_optimization,
+                selective_cache_components=cache_components
+            )
+        else:
+            # Standard initialization without selective caching
+            predictor = EnhancedNBAPredictor(
+                seasons=args.seasons,
+                use_enhanced_models=use_enhanced,
+                quick_mode=args.quick,
+                use_cache=use_cache,
+                cache_dir=cache_dir,
+                hardware_optimization=hw_optimization
+            )
     
     try:
         # If not loading pre-trained models, fetch data and train

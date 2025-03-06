@@ -14,6 +14,64 @@ The system has been optimized for both accuracy and computational efficiency, wi
 - **Mock Model Support**: Graceful degradation when running with insufficient data
 - **Memory Management**: Resolved DataFrame fragmentation issues for better performance
 
+## Usage
+
+```bash
+# Run with default settings
+python main.py
+
+# Disable cache for fresh data and models
+python main.py --no-cache
+
+# Run with selective caching (only caches some parts of the pipeline)
+python main.py --no-cache --selective-cache data     # Only cache raw data, refresh features & models
+python main.py --no-cache --selective-cache features # Only cache features, refresh data & models
+python main.py --no-cache --selective-cache models   # Only cache models, refresh data & features
+
+# Run with standard (simpler) models instead of enhanced ones
+python main.py --standard
+
+# Run in quick mode (faster but less accurate)
+python main.py --quick
+
+# Analyze specific seasons
+python main.py --seasons 2021-22 2022-23
+
+# Save trained models
+python main.py --save-models
+
+# Load previously saved models
+python main.py --load-models saved_models/nba_model_20230401_120000
+
+# Cache management
+python main.py --cache-action status
+python main.py --cache-action clear_type --cache-type features
+python main.py --cache-action clear_all
+
+# Google Colab integration with Drive
+python main.py --colab-drive
+```
+
+## A100 GPU Optimizations
+
+This system includes specialized optimizations for running on A100 GPUs:
+
+1. **Auto-detected GPU optimizations**: The code automatically detects A100 GPUs and applies specialized settings.
+
+2. **Increased batch sizes**: When an A100 is detected, batch sizes are significantly increased (4-8x larger).
+
+3. **Automatic mixed precision**: A100 GPUs use TF32 and mixed precision automatically for much faster training.
+
+4. **Selective caching**: Use `--no-cache --selective-cache data` to cache just raw data while refreshing models.
+
+5. **Parallel data fetching**: API requests are made in parallel with optimized rate limiting.
+
+6. **Bulk data retrieval**: Data is fetched in bulk wherever possible rather than season by season.
+
+7. **Memory preallocation**: GPU memory is preallocated in an optimized way for A100s to prevent fragmentation.
+
+8. **Reduced sleep times**: API rate limiting has been optimized with minimal safe sleep durations.
+
 ## Technology Stack
 
 - **Machine Learning**: XGBoost, LightGBM, PyTorch, scikit-learn
