@@ -1,21 +1,22 @@
 import pandas as pd
 import numpy as np
 from collections import defaultdict
-from nba_api.stats.endpoints import leaguegamefinder, commonallplayers, playerprofilev2
+from nba_api.stats.endpoints import leaguegamefinder
 from sklearn.model_selection import TimeSeriesSplit
 from sklearn.preprocessing import StandardScaler
 from sklearn.feature_selection import SelectFromModel
 import xgboost as xgb
 from sklearn.metrics import accuracy_score, brier_score_loss, roc_auc_score
-from sklearn.neural_network import MLPClassifier
+from sklearn.neural_network import MLPClassifier  # noqa: F401
 from typing import List, Dict, Tuple
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta  # noqa: F401
 import pytz
 from geopy.distance import geodesic
 import time
+
 
 class DeepNBAPredictor(nn.Module):
     def __init__(self, input_size):
@@ -41,6 +42,7 @@ class DeepNBAPredictor(nn.Module):
     def forward(self, x):
         return self.network(x)
 
+
 class EnhancedNBAPredictor:
     def __init__(self, seasons: List[str]):
         self.seasons = seasons
@@ -64,11 +66,15 @@ class EnhancedNBAPredictor:
             'DAL': {'coords': (32.7905, -96.8103), 'timezone': 'America/Chicago'},
             'DEN': {'coords': (39.7487, -105.0077), 'timezone': 'America/Denver'},
             'DET': {'coords': (42.3410, -83.0550), 'timezone': 'America/New_York'},
-            'GSW': {'coords': (37.7679, -122.3874), 'timezone': 'America/Los_Angeles'},
+            'GSW': {'coords': (37.7679, -122.3874), 
+                    'timezone': 'America/Los_Angeles'},
             'HOU': {'coords': (29.7508, -95.3621), 'timezone': 'America/Chicago'},
-            'IND': {'coords': (39.7640, -86.1555), 'timezone': 'America/Indiana/Indianapolis'},
-            'LAC': {'coords': (34.0430, -118.2673), 'timezone': 'America/Los_Angeles'},
-            'LAL': {'coords': (34.0430, -118.2673), 'timezone': 'America/Los_Angeles'},
+            'IND': {'coords': (39.7640, -86.1555), 
+                    'timezone': 'America/Indiana/Indianapolis'},
+            'LAC': {'coords': (34.0430, -118.2673), 
+                    'timezone': 'America/Los_Angeles'},
+            'LAL': {'coords': (34.0430, -118.2673), 
+                    'timezone': 'America/Los_Angeles'},
             'MEM': {'coords': (35.1382, -90.0505), 'timezone': 'America/Chicago'},
             'MIA': {'coords': (25.7814, -80.1870), 'timezone': 'America/New_York'},
             'MIL': {'coords': (43.0436, -87.9172), 'timezone': 'America/Chicago'},
@@ -79,8 +85,10 @@ class EnhancedNBAPredictor:
             'ORL': {'coords': (28.5392, -81.3839), 'timezone': 'America/New_York'},
             'PHI': {'coords': (39.9012, -75.1720), 'timezone': 'America/New_York'},
             'PHX': {'coords': (33.4457, -112.0712), 'timezone': 'America/Phoenix'},
-            'POR': {'coords': (45.5316, -122.6668), 'timezone': 'America/Los_Angeles'},
-            'SAC': {'coords': (38.5806, -121.4996), 'timezone': 'America/Los_Angeles'},
+            'POR': {'coords': (45.5316, -122.6668), 
+                    'timezone': 'America/Los_Angeles'},
+            'SAC': {'coords': (38.5806, -121.4996), 
+                    'timezone': 'America/Los_Angeles'},
             'SAS': {'coords': (29.4271, -98.4375), 'timezone': 'America/Chicago'},
             'TOR': {'coords': (43.6435, -79.3791), 'timezone': 'America/Toronto'},
             'UTA': {'coords': (40.7683, -111.9011), 'timezone': 'America/Denver'},
@@ -635,60 +643,60 @@ class EnhancedNBAPredictor:
         return features, stats_df['TARGET']
 
     def calculate_travel_impact(self, row: pd.Series) -> Dict:
-            """Calculate travel distance and timezone changes between games."""
-            try:
-                # Extract team abbreviations - handle both full names and abbreviations
-                def get_team_abbrev(team_id):
-                    # Map of common team IDs to abbreviations
-                    team_map = {
-                        1610612737: 'ATL', 1610612738: 'BOS', 1610612751: 'BKN',
-                        1610612766: 'CHA', 1610612741: 'CHI', 1610612739: 'CLE',
-                        1610612742: 'DAL', 1610612743: 'DEN', 1610612765: 'DET',
-                        1610612744: 'GSW', 1610612745: 'HOU', 1610612754: 'IND',
-                        1610612746: 'LAC', 1610612747: 'LAL', 1610612763: 'MEM',
-                        1610612748: 'MIA', 1610612749: 'MIL', 1610612750: 'MIN',
-                        1610612740: 'NOP', 1610612752: 'NYK', 1610612760: 'OKC',
-                        1610612753: 'ORL', 1610612755: 'PHI', 1610612756: 'PHX',
-                        1610612757: 'POR', 1610612758: 'SAC', 1610612759: 'SAS',
-                        1610612761: 'TOR', 1610612762: 'UTA', 1610612764: 'WAS'
-                    }
-                    return team_map.get(team_id, 'UNK')
+        """Calculate travel distance and timezone changes between games."""
+        try:
+            # Extract team abbreviations - handle both full names and abbreviations
+            def get_team_abbrev(team_id):
+                # Map of common team IDs to abbreviations
+                team_map = {
+                    1610612737: 'ATL', 1610612738: 'BOS', 1610612751: 'BKN',
+                    1610612766: 'CHA', 1610612741: 'CHI', 1610612739: 'CLE',
+                    1610612742: 'DAL', 1610612743: 'DEN', 1610612765: 'DET',
+                    1610612744: 'GSW', 1610612745: 'HOU', 1610612754: 'IND',
+                    1610612746: 'LAC', 1610612747: 'LAL', 1610612763: 'MEM',
+                    1610612748: 'MIA', 1610612749: 'MIL', 1610612750: 'MIN',
+                    1610612740: 'NOP', 1610612752: 'NYK', 1610612760: 'OKC',
+                    1610612753: 'ORL', 1610612755: 'PHI', 1610612756: 'PHX',
+                    1610612757: 'POR', 1610612758: 'SAC', 1610612759: 'SAS',
+                    1610612761: 'TOR', 1610612762: 'UTA', 1610612764: 'WAS'
+                }
+                return team_map.get(team_id, 'UNK')
 
-                home_team = get_team_abbrev(row['TEAM_ID_HOME'])
-                away_team = get_team_abbrev(row['TEAM_ID_AWAY'])
+            home_team = get_team_abbrev(row['TEAM_ID_HOME'])
+            away_team = get_team_abbrev(row['TEAM_ID_AWAY'])
 
-                if home_team == 'UNK' or away_team == 'UNK':
-                    return {'distance': 0, 'timezone_diff': 0}
-
-                if home_team not in self.team_locations or away_team not in self.team_locations:
-                    return {'distance': 0, 'timezone_diff': 0}
-
-                # Calculate distance
-                home_coords = self.team_locations[home_team]['coords']
-                away_coords = self.team_locations[away_team]['coords']
-                distance = geodesic(home_coords, away_coords).miles
-
-                # Calculate timezone difference
-                home_tz = self.timezone_map[self.team_locations[home_team]['timezone']]
-                away_tz = self.timezone_map[self.team_locations[away_team]['timezone']]
-
-                if 'GAME_DATE' in row:
-                    game_date = pd.to_datetime(row['GAME_DATE'])
-                elif 'GAME_DATE_HOME' in row:
-                    game_date = pd.to_datetime(row['GAME_DATE_HOME'])
-                else:
-                    game_date = pd.Timestamp.now()
-
-                # Account for daylight savings
-                home_dt = home_tz.localize(game_date)
-                away_dt = away_tz.localize(game_date)
-                timezone_diff = (home_dt.utcoffset() - away_dt.utcoffset()).total_seconds() / 3600
-
-                return {'distance': distance, 'timezone_diff': timezone_diff}
-
-            except Exception as e:
-                print(f"Error calculating travel impact: {e}")
+            if home_team == 'UNK' or away_team == 'UNK':
                 return {'distance': 0, 'timezone_diff': 0}
+
+            if home_team not in self.team_locations or away_team not in self.team_locations:
+                return {'distance': 0, 'timezone_diff': 0}
+
+            # Calculate distance
+            home_coords = self.team_locations[home_team]['coords']
+            away_coords = self.team_locations[away_team]['coords']
+            distance = geodesic(home_coords, away_coords).miles
+
+            # Calculate timezone difference
+            home_tz = self.timezone_map[self.team_locations[home_team]['timezone']]
+            away_tz = self.timezone_map[self.team_locations[away_team]['timezone']]
+
+            if 'GAME_DATE' in row:
+                game_date = pd.to_datetime(row['GAME_DATE'])
+            elif 'GAME_DATE_HOME' in row:
+                game_date = pd.to_datetime(row['GAME_DATE_HOME'])
+            else:
+                game_date = pd.Timestamp.now()
+
+            # Account for daylight savings
+            home_dt = home_tz.localize(game_date)
+            away_dt = away_tz.localize(game_date)
+            timezone_diff = (home_dt.utcoffset() - away_dt.utcoffset()).total_seconds() / 3600
+
+            return {'distance': distance, 'timezone_diff': timezone_diff}
+
+        except Exception as e:
+            print(f"Error calculating travel impact: {e}")
+            return {'distance': 0, 'timezone_diff': 0}
 
     def fetch_player_availability(self, season: str) -> pd.DataFrame:
         """Fetch player availability data for a season."""
@@ -711,7 +719,7 @@ class EnhancedNBAPredictor:
         print("Calculating enhanced head-to-head features...")
 
         # Create a copy of games for manipulation
-        h2h_features = games.copy()
+        h2h_features = games.copy()  # noqa: F841
 
         # Calculate basic H2H stats
         h2h_stats = defaultdict(lambda: defaultdict(list))
@@ -801,116 +809,116 @@ class EnhancedNBAPredictor:
         return pd.DataFrame(h2h_features_list)
 
     def train_deep_model(self, X: pd.DataFrame) -> Tuple[List, List]:
-            """Train deep neural network model with enhanced architecture."""
-            print("\nTraining deep neural network model...")
+        """Train deep neural network model with enhanced architecture."""
+        print("\nTraining deep neural network model...")
 
-            # Extract target variable
-            y = X['TARGET']
-            X = X.drop(['TARGET', 'GAME_DATE'], axis=1, errors='ignore')
+        # Extract target variable
+        y = X['TARGET']
+        X = X.drop(['TARGET', 'GAME_DATE'], axis=1, errors='ignore')
 
-            print(f"Training deep model with {len(X)} samples and {len(X.columns)} features")
+        print(f"Training deep model with {len(X)} samples and {len(X.columns)} features")
 
-            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-            print(f"Using device: {device}")
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        print(f"Using device: {device}")
 
-            models = []
-            scalers = []
-            fold_metrics = []
-            tscv = TimeSeriesSplit(n_splits=5)
+        models = []
+        scalers = []
+        fold_metrics = []
+        tscv = TimeSeriesSplit(n_splits=5)
 
-            for fold, (train_idx, val_idx) in enumerate(tscv.split(X), 1):
-                print(f"\nTraining deep model fold {fold}...")
+        for fold, (train_idx, val_idx) in enumerate(tscv.split(X), 1):
+            print(f"\nTraining deep model fold {fold}...")
 
-                # Prepare data
-                X_train, X_val = X.iloc[train_idx], X.iloc[val_idx]
-                y_train, y_val = y.iloc[train_idx], y.iloc[val_idx]
+            # Prepare data
+            X_train, X_val = X.iloc[train_idx], X.iloc[val_idx]
+            y_train, y_val = y.iloc[train_idx], y.iloc[val_idx]
 
-                # Scale features
-                scaler = StandardScaler()
-                X_train_scaled = scaler.fit_transform(X_train)
-                X_val_scaled = scaler.transform(X_val)
+            # Scale features
+            scaler = StandardScaler()
+            X_train_scaled = scaler.fit_transform(X_train)
+            X_val_scaled = scaler.transform(X_val)
 
-                # Convert to PyTorch tensors
-                X_train_tensor = torch.FloatTensor(X_train_scaled).to(device)
-                y_train_tensor = torch.LongTensor(y_train.values).to(device)
-                X_val_tensor = torch.FloatTensor(X_val_scaled).to(device)
-                y_val_tensor = torch.LongTensor(y_val.values).to(device)
+            # Convert to PyTorch tensors
+            X_train_tensor = torch.FloatTensor(X_train_scaled).to(device)
+            y_train_tensor = torch.LongTensor(y_train.values).to(device)
+            X_val_tensor = torch.FloatTensor(X_val_scaled).to(device)
+            y_val_tensor = torch.LongTensor(y_val.values).to(device)
 
-                # Initialize model
-                model = DeepNBAPredictor(X_train.shape[1]).to(device)
-                criterion = nn.CrossEntropyLoss()
-                optimizer = optim.Adam(model.parameters(), lr=0.001, weight_decay=1e-5)
-                scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=5)
+            # Initialize model
+            model = DeepNBAPredictor(X_train.shape[1]).to(device)
+            criterion = nn.CrossEntropyLoss()
+            optimizer = optim.Adam(model.parameters(), lr=0.001, weight_decay=1e-5)
+            scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=5)
 
-                # Training loop
-                best_val_loss = float('inf')
-                patience = 10
-                patience_counter = 0
-                best_metrics = None
+            # Training loop
+            best_val_loss = float('inf')
+            patience = 10
+            patience_counter = 0
+            best_metrics = None
 
-                for epoch in range(100):
-                    # Training
-                    model.train()
-                    optimizer.zero_grad()
-                    outputs = model(X_train_tensor)
-                    loss = criterion(outputs, y_train_tensor)
-                    loss.backward()
-                    optimizer.step()
+            for epoch in range(100):
+                # Training
+                model.train()
+                optimizer.zero_grad()
+                outputs = model(X_train_tensor)
+                loss = criterion(outputs, y_train_tensor)
+                loss.backward()
+                optimizer.step()
 
-                    # Validation
-                    model.eval()
-                    with torch.no_grad():
-                        val_outputs = model(X_val_tensor)
-                        val_loss = criterion(val_outputs, y_val_tensor)
-                        val_preds = torch.softmax(val_outputs, dim=1)[:, 1].cpu().numpy()
-                        val_pred_binary = (val_preds > 0.5).astype(int)
+                # Validation
+                model.eval()
+                with torch.no_grad():
+                    val_outputs = model(X_val_tensor)
+                    val_loss = criterion(val_outputs, y_val_tensor)
+                    val_preds = torch.softmax(val_outputs, dim=1)[:, 1].cpu().numpy()
+                    val_pred_binary = (val_preds > 0.5).astype(int)
 
-                        # Calculate metrics
-                        acc = accuracy_score(y_val, val_pred_binary)
-                        brier = brier_score_loss(y_val, val_preds)
-                        auc = roc_auc_score(y_val, val_preds)
+                    # Calculate metrics
+                    acc = accuracy_score(y_val, val_pred_binary)
+                    brier = brier_score_loss(y_val, val_preds)
+                    auc = roc_auc_score(y_val, val_preds)
 
-                        # Store best metrics
-                        if val_loss < best_val_loss:
-                            best_val_loss = val_loss
-                            patience_counter = 0
-                            best_model_state = model.state_dict().copy()
-                            best_metrics = {
-                                'accuracy': acc,
-                                'brier_score': brier,
-                                'auc': auc
-                            }
-                        else:
-                            patience_counter += 1
+                    # Store best metrics
+                    if val_loss < best_val_loss:
+                        best_val_loss = val_loss
+                        patience_counter = 0
+                        best_model_state = model.state_dict().copy()
+                        best_metrics = {
+                            'accuracy': acc,
+                            'brier_score': brier,
+                            'auc': auc
+                        }
+                    else:
+                        patience_counter += 1
 
-                    # Update learning rate
-                    scheduler.step(val_loss)
+                # Update learning rate
+                scheduler.step(val_loss)
 
-                    # Early stopping check
-                    if patience_counter >= patience:
-                        print(f"Early stopping at epoch {epoch}")
-                        break
+                # Early stopping check
+                if patience_counter >= patience:
+                    print(f"Early stopping at epoch {epoch}")
+                    break
 
-                # Load best model
-                model.load_state_dict(best_model_state)
-                models.append(model)
-                scalers.append(scaler)
-                fold_metrics.append(best_metrics)
+            # Load best model
+            model.load_state_dict(best_model_state)
+            models.append(model)
+            scalers.append(scaler)
+            fold_metrics.append(best_metrics)
 
-                print(f"Fold {fold} Best Metrics:")
-                print(f"Accuracy: {best_metrics['accuracy']:.3f}")
-                print(f"Brier Score: {best_metrics['brier_score']:.3f}")
-                print(f"AUC-ROC: {best_metrics['auc']:.3f}")
+            print(f"Fold {fold} Best Metrics:")
+            print(f"Accuracy: {best_metrics['accuracy']:.3f}")
+            print(f"Brier Score: {best_metrics['brier_score']:.3f}")
+            print(f"AUC-ROC: {best_metrics['auc']:.3f}")
 
-            # Print overall performance
-            print("\nOverall Deep Model Performance:")
-            metrics_df = pd.DataFrame(fold_metrics)
-            for metric in metrics_df.columns:
-                mean_val = metrics_df[metric].mean()
-                std_val = metrics_df[metric].std()
-                print(f"{metric}: {mean_val:.3f} ± {std_val:.3f}")
+        # Print overall performance
+        print("\nOverall Deep Model Performance:")
+        metrics_df = pd.DataFrame(fold_metrics)
+        for metric in metrics_df.columns:
+            mean_val = metrics_df[metric].mean()
+            std_val = metrics_df[metric].std()
+            print(f"{metric}: {mean_val:.3f} ± {std_val:.3f}")
 
-            return models, scalers
+        return models, scalers
 
     def calculate_position_metrics(self, games: pd.DataFrame) -> pd.DataFrame:
         """Calculate position-specific performance metrics."""
@@ -1058,151 +1066,151 @@ class EnhancedNBAPredictor:
         return confidence_scores
 
     def prepare_enhanced_features(self, stats_df: pd.DataFrame) -> pd.DataFrame:
-            """Prepare enhanced feature set with all new metrics."""
-            print("Preparing enhanced feature set...")
+        """Prepare enhanced feature set with all new metrics."""
+        print("Preparing enhanced feature set...")
 
-            try:
-                # First, let's debug what columns we actually have
-                print("Available columns:", stats_df.columns.tolist())
+        try:
+            # First, let's debug what columns we actually have
+            print("Available columns:", stats_df.columns.tolist())
 
-                # Initialize features DataFrame
-                features = pd.DataFrame()
+            # Initialize features DataFrame
+            features = pd.DataFrame()
 
-                # Get the game date column - check both possible names
-                if 'GAME_DATE_HOME' in stats_df.columns:
-                    date_col = 'GAME_DATE_HOME'
-                elif 'GAME_DATE' in stats_df.columns:
-                    date_col = 'GAME_DATE'
-                else:
-                    raise KeyError("No game date column found in stats DataFrame")
+            # Get the game date column - check both possible names
+            if 'GAME_DATE_HOME' in stats_df.columns:
+                date_col = 'GAME_DATE_HOME'
+            elif 'GAME_DATE' in stats_df.columns:
+                date_col = 'GAME_DATE'
+            else:
+                raise KeyError("No game date column found in stats DataFrame")
 
-                features['GAME_DATE'] = pd.to_datetime(stats_df[date_col])
+            features['GAME_DATE'] = pd.to_datetime(stats_df[date_col])
 
-                # Get target variable - check both possible names
-                if 'WL_HOME' in stats_df.columns:
-                    features['TARGET'] = (stats_df['WL_HOME'] == 'W').astype(int)
-                elif 'TARGET' in stats_df.columns:
-                    features['TARGET'] = stats_df['TARGET']
-                else:
-                    raise KeyError("No target column found in stats DataFrame")
+            # Get target variable - check both possible names
+            if 'WL_HOME' in stats_df.columns:
+                features['TARGET'] = (stats_df['WL_HOME'] == 'W').astype(int)
+            elif 'TARGET' in stats_df.columns:
+                features['TARGET'] = stats_df['TARGET']
+            else:
+                raise KeyError("No target column found in stats DataFrame")
 
-                # Process time window features
-                for window in self.lookback_windows:
-                    window_str = f'_{window}D'
+            # Process time window features
+            for window in self.lookback_windows:
+                window_str = f'_{window}D'
 
-                    # Win percentage features
-                    for team_type in ['HOME', 'AWAY']:
-                        win_col = f'WIN_mean_{team_type}{window_str}'
-                        if win_col in stats_df.columns:
-                            features[f'WIN_PCT_{team_type}{window_str}'] = stats_df[win_col]
-                        else:
-                            print(f"Warning: {win_col} not found in stats DataFrame")
-                            features[f'WIN_PCT_{team_type}{window_str}'] = 0
+                # Win percentage features
+                for team_type in ['HOME', 'AWAY']:
+                    win_col = f'WIN_mean_{team_type}{window_str}'
+                    if win_col in stats_df.columns:
+                        features[f'WIN_PCT_{team_type}{window_str}'] = stats_df[win_col]
+                    else:
+                        print(f"Warning: {win_col} not found in stats DataFrame")
+                        features[f'WIN_PCT_{team_type}{window_str}'] = 0
 
-                    # Calculate win percentage differential if both home and away exist
-                    if all(f'WIN_PCT_{t}{window_str}' in features.columns for t in ['HOME', 'AWAY']):
-                        features[f'WIN_PCT_DIFF{window_str}'] = (
-                            features[f'WIN_PCT_HOME{window_str}'] -
-                            features[f'WIN_PCT_AWAY{window_str}']
-                        )
-
-                    # Rating metrics
-                    for metric in ['OFF_RTG', 'DEF_RTG', 'NET_RTG', 'PACE']:
-                        home_col = f'{metric}_mean_HOME{window_str}'
-                        away_col = f'{metric}_mean_AWAY{window_str}'
-
-                        if home_col in stats_df.columns and away_col in stats_df.columns:
-                            home_stat = stats_df[home_col].fillna(0)
-                            away_stat = stats_df[away_col].fillna(0)
-                            features[f'{metric}_DIFF{window_str}'] = home_stat - away_stat
-                        else:
-                            print(f"Warning: {metric} columns not found for {window_str} window")
-
-                    # Points and turnover features
-                    pts_home = f'PTS_mean_HOME{window_str}'
-                    pts_away = f'PTS_mean_AWAY{window_str}'
-                    tov_home = f'TOV_mean_HOME{window_str}'
-                    tov_away = f'TOV_mean_AWAY{window_str}'
-
-                    if all(col in stats_df.columns for col in [pts_home, pts_away, tov_home, tov_away]):
-                        features[f'EFF_DIFF{window_str}'] = (
-                            (stats_df[pts_home].fillna(0) / stats_df[tov_home].fillna(1)) -
-                            (stats_df[pts_away].fillna(0) / stats_df[tov_away].fillna(1))
-                        )
-
-                    # Consistency metrics
-                    for team_type in ['HOME', 'AWAY']:
-                        pts_mean = f'PTS_mean_{team_type}{window_str}'
-                        pts_std = f'PTS_std_{team_type}{window_str}'
-
-                        if pts_mean in stats_df.columns and pts_std in stats_df.columns:
-                            features[f'{team_type}_CONSISTENCY{window_str}'] = (
-                                stats_df[pts_std].fillna(0) / stats_df[pts_mean].fillna(1)
-                            )
-
-                # Add travel impact features
-                print("Calculating travel impacts...")
-                travel_impacts = stats_df.apply(self.calculate_travel_impact, axis=1)
-                features['TRAVEL_DISTANCE'] = [x['distance'] for x in travel_impacts]
-                features['TIMEZONE_DIFF'] = [x['timezone_diff'] for x in travel_impacts]
-
-                # Add rest and fatigue features
-                print("Adding rest and fatigue features...")
-                if 'REST_DAYS_HOME' in stats_df.columns and 'REST_DAYS_AWAY' in stats_df.columns:
-                    features['REST_DIFF'] = (
-                        stats_df['REST_DAYS_HOME'].fillna(0) -
-                        stats_df['REST_DAYS_AWAY'].fillna(0)
+                # Calculate win percentage differential if both home and away exist
+                if all(f'WIN_PCT_{t}{window_str}' in features.columns for t in ['HOME', 'AWAY']):
+                    features[f'WIN_PCT_DIFF{window_str}'] = (
+                        features[f'WIN_PCT_HOME{window_str}'] -
+                        features[f'WIN_PCT_AWAY{window_str}']
                     )
 
-                for window in self.lookback_windows:
-                    fatigue_home = f'FATIGUE_HOME_{window}D'
-                    fatigue_away = f'FATIGUE_AWAY_{window}D'
+                # Rating metrics
+                for metric in ['OFF_RTG', 'DEF_RTG', 'NET_RTG', 'PACE']:
+                    home_col = f'{metric}_mean_HOME{window_str}'
+                    away_col = f'{metric}_mean_AWAY{window_str}'
 
-                    if fatigue_home in stats_df.columns and fatigue_away in stats_df.columns:
-                        features[f'FATIGUE_DIFF_{window}D'] = (
-                            stats_df[fatigue_home].fillna(0) -
-                            stats_df[fatigue_away].fillna(0)
+                    if home_col in stats_df.columns and away_col in stats_df.columns:
+                        home_stat = stats_df[home_col].fillna(0)
+                        away_stat = stats_df[away_col].fillna(0)
+                        features[f'{metric}_DIFF{window_str}'] = home_stat - away_stat
+                    else:
+                        print(f"Warning: {metric} columns not found for {window_str} window")
+
+                # Points and turnover features
+                pts_home = f'PTS_mean_HOME{window_str}'
+                pts_away = f'PTS_mean_AWAY{window_str}'
+                tov_home = f'TOV_mean_HOME{window_str}'
+                tov_away = f'TOV_mean_AWAY{window_str}'
+
+                if all(col in stats_df.columns for col in [pts_home, pts_away, tov_home, tov_away]):
+                    features[f'EFF_DIFF{window_str}'] = (
+                        (stats_df[pts_home].fillna(0) / stats_df[tov_home].fillna(1)) -
+                        (stats_df[pts_away].fillna(0) / stats_df[tov_away].fillna(1))
+                    )
+
+                # Consistency metrics
+                for team_type in ['HOME', 'AWAY']:
+                    pts_mean = f'PTS_mean_{team_type}{window_str}'
+                    pts_std = f'PTS_std_{team_type}{window_str}'
+
+                    if pts_mean in stats_df.columns and pts_std in stats_df.columns:
+                        features[f'{team_type}_CONSISTENCY{window_str}'] = (
+                            stats_df[pts_std].fillna(0) / stats_df[pts_mean].fillna(1)
                         )
 
-                # Add head-to-head features
-                print("Adding head-to-head features...")
-                h2h_cols = ['H2H_GAMES', 'H2H_WIN_PCT', 'H2H_AVG_MARGIN',
-                          'H2H_STREAK', 'H2H_HOME_ADVANTAGE', 'H2H_MOMENTUM']
-                for col in h2h_cols:
-                    if col in stats_df.columns:
-                        features[col] = stats_df[col].fillna(0)
+            # Add travel impact features
+            print("Calculating travel impacts...")
+            travel_impacts = stats_df.apply(self.calculate_travel_impact, axis=1)
+            features['TRAVEL_DISTANCE'] = [x['distance'] for x in travel_impacts]
+            features['TIMEZONE_DIFF'] = [x['timezone_diff'] for x in travel_impacts]
 
-                # Create interaction features
-                print("Creating interaction features...")
-                if all(col in features.columns for col in ['FATIGUE_DIFF_14D', 'TRAVEL_DISTANCE']):
-                    features['FATIGUE_TRAVEL_INTERACTION'] = (
-                        features['FATIGUE_DIFF_14D'] * features['TRAVEL_DISTANCE'] / 1000
+            # Add rest and fatigue features
+            print("Adding rest and fatigue features...")
+            if 'REST_DAYS_HOME' in stats_df.columns and 'REST_DAYS_AWAY' in stats_df.columns:
+                features['REST_DIFF'] = (
+                    stats_df['REST_DAYS_HOME'].fillna(0) -
+                    stats_df['REST_DAYS_AWAY'].fillna(0)
+                )
+
+            for window in self.lookback_windows:
+                fatigue_home = f'FATIGUE_HOME_{window}D'
+                fatigue_away = f'FATIGUE_AWAY_{window}D'
+
+                if fatigue_home in stats_df.columns and fatigue_away in stats_df.columns:
+                    features[f'FATIGUE_DIFF_{window}D'] = (
+                        stats_df[fatigue_home].fillna(0) -
+                        stats_df[fatigue_away].fillna(0)
                     )
 
-                if all(col in features.columns for col in ['WIN_PCT_DIFF_30D', 'REST_DIFF']):
-                    features['MOMENTUM_REST_INTERACTION'] = (
-                        features['WIN_PCT_DIFF_30D'] * features['REST_DIFF']
-                    )
+            # Add head-to-head features
+            print("Adding head-to-head features...")
+            h2h_cols = ['H2H_GAMES', 'H2H_WIN_PCT', 'H2H_AVG_MARGIN',
+                      'H2H_STREAK', 'H2H_HOME_ADVANTAGE', 'H2H_MOMENTUM']
+            for col in h2h_cols:
+                if col in stats_df.columns:
+                    features[col] = stats_df[col].fillna(0)
 
-                # Clean up the data
-                print("Cleaning and validating data...")
-                features = features.replace([np.inf, -np.inf], np.nan)
-                features = features.fillna(0)
+            # Create interaction features
+            print("Creating interaction features...")
+            if all(col in features.columns for col in ['FATIGUE_DIFF_14D', 'TRAVEL_DISTANCE']):
+                features['FATIGUE_TRAVEL_INTERACTION'] = (
+                    features['FATIGUE_DIFF_14D'] * features['TRAVEL_DISTANCE'] / 1000
+                )
 
-                # Clip extreme values for numerical columns
-                for col in features.columns:
-                    if col not in ['GAME_DATE', 'TARGET']:
-                        q1 = features[col].quantile(0.01)
-                        q99 = features[col].quantile(0.99)
-                        features[col] = features[col].clip(q1, q99)
+            if all(col in features.columns for col in ['WIN_PCT_DIFF_30D', 'REST_DIFF']):
+                features['MOMENTUM_REST_INTERACTION'] = (
+                    features['WIN_PCT_DIFF_30D'] * features['REST_DIFF']
+                )
 
-                print(f"Successfully created {len(features.columns)} features")
-                return features
+            # Clean up the data
+            print("Cleaning and validating data...")
+            features = features.replace([np.inf, -np.inf], np.nan)
+            features = features.fillna(0)
 
-            except Exception as e:
-                print(f"Error preparing enhanced features: {e}")
-                print("DataFrame columns:", stats_df.columns.tolist())
-                raise
+            # Clip extreme values for numerical columns
+            for col in features.columns:
+                if col not in ['GAME_DATE', 'TARGET']:
+                    q1 = features[col].quantile(0.01)
+                    q99 = features[col].quantile(0.99)
+                    features[col] = features[col].clip(q1, q99)
+
+            print(f"Successfully created {len(features.columns)} features")
+            return features
+
+        except Exception as e:
+            print(f"Error preparing enhanced features: {e}")
+            print("DataFrame columns:", stats_df.columns.tolist())
+            raise
 
     def predict_with_confidence(self, X: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray]:
         """Make predictions with confidence scores."""
@@ -1365,6 +1373,7 @@ class EnhancedNBAPredictor:
             std_val = metrics_df[metric].std()
             print(f"{metric}: {mean_val:.3f} ± {std_val:.3f}")
 
+
 def main():
     seasons = ['2020-21', '2021-22', '2022-23', '2023-24']
     predictor = EnhancedNBAPredictor(seasons)
@@ -1409,6 +1418,7 @@ def main():
     except Exception as e:
         print(f"Error during model training: {e}")
         raise
+
 
 if __name__ == "__main__":
     main()
