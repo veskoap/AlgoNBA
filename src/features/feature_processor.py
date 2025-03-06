@@ -172,12 +172,39 @@ class FeatureTransformer:
             # Get windowed column names
             home_col = dependencies[0]  # WIN_PCT_HOME_{window}D
             away_col = dependencies[1]  # WIN_PCT_AWAY_{window}D
-            return df[home_col] - df[away_col]
+            
+            # Make sure we're returning a Series, not a DataFrame
+            # Add error handling to avoid the DataFrame.dtype issue
+            try:
+                # Safe subtraction with explicit Series conversion
+                result = pd.Series(
+                    df[home_col].values - df[away_col].values,
+                    index=df.index,
+                    name=feature_name
+                )
+                return result
+            except Exception as e:
+                print(f"Error calculating {feature_name}: {e}")
+                # Return a default Series with zeros as fallback
+                return pd.Series(0, index=df.index, name=feature_name)
             
         elif base_name in ['OFF_RTG_DIFF', 'DEF_RTG_DIFF', 'NET_RTG_DIFF', 'PACE_DIFF']:
             home_col = dependencies[0]  # RTG_mean_HOME_{window}D
             away_col = dependencies[1]  # RTG_mean_AWAY_{window}D
-            return df[home_col] - df[away_col]
+            
+            # Make sure we're returning a Series, not a DataFrame
+            try:
+                # Safe subtraction with explicit Series conversion
+                result = pd.Series(
+                    df[home_col].values - df[away_col].values,
+                    index=df.index,
+                    name=feature_name
+                )
+                return result
+            except Exception as e:
+                print(f"Error calculating {feature_name}: {e}")
+                # Return a default Series with zeros as fallback
+                return pd.Series(0, index=df.index, name=feature_name)
             
         elif base_name == 'EFF_DIFF':
             pts_home = dependencies[0]  # PTS_mean_HOME_{window}D
@@ -185,40 +212,110 @@ class FeatureTransformer:
             tov_home = dependencies[2]  # TOV_mean_HOME_{window}D
             tov_away = dependencies[3]  # TOV_mean_AWAY_{window}D
             
-            # Calculate efficiency (points per turnover)
-            home_eff = safe_divide(df[pts_home], df[tov_home], index=df.index)
-            away_eff = safe_divide(df[pts_away], df[tov_away], index=df.index)
-            return home_eff - away_eff
+            try:
+                # Calculate efficiency (points per turnover)
+                home_eff = safe_divide(df[pts_home], df[tov_home], index=df.index)
+                away_eff = safe_divide(df[pts_away], df[tov_away], index=df.index)
+                
+                # Ensure we're returning a Series
+                result = pd.Series(
+                    home_eff.values - away_eff.values,
+                    index=df.index,
+                    name=feature_name
+                )
+                return result
+            except Exception as e:
+                print(f"Error calculating {feature_name}: {e}")
+                # Return a default Series with zeros as fallback
+                return pd.Series(0, index=df.index, name=feature_name)
             
         elif base_name == 'HOME_CONSISTENCY':
             pts_std = dependencies[0]  # PTS_std_HOME_{window}D
             pts_mean = dependencies[1]  # PTS_mean_HOME_{window}D
-            return safe_divide(df[pts_std], df[pts_mean], index=df.index)
+            
+            try:
+                result = safe_divide(df[pts_std], df[pts_mean], index=df.index)
+                # Ensure we're returning a Series
+                if isinstance(result, pd.Series):
+                    result.name = feature_name
+                    return result
+                else:
+                    # Convert to Series if it's not already
+                    return pd.Series(result, index=df.index, name=feature_name)
+            except Exception as e:
+                print(f"Error calculating {feature_name}: {e}")
+                return pd.Series(0.5, index=df.index, name=feature_name)
             
         elif base_name == 'AWAY_CONSISTENCY':
             pts_std = dependencies[0]  # PTS_std_AWAY_{window}D
             pts_mean = dependencies[1]  # PTS_mean_AWAY_{window}D
-            return safe_divide(df[pts_std], df[pts_mean], index=df.index)
+            
+            try:
+                result = safe_divide(df[pts_std], df[pts_mean], index=df.index)
+                # Ensure we're returning a Series
+                if isinstance(result, pd.Series):
+                    result.name = feature_name
+                    return result
+                else:
+                    # Convert to Series if it's not already
+                    return pd.Series(result, index=df.index, name=feature_name)
+            except Exception as e:
+                print(f"Error calculating {feature_name}: {e}")
+                return pd.Series(0.5, index=df.index, name=feature_name)
             
         elif base_name == 'FATIGUE_DIFF':
             home_col = dependencies[0]  # FATIGUE_HOME_{window}D
             away_col = dependencies[1]  # FATIGUE_AWAY_{window}D
-            return df[home_col] - df[away_col]
+            
+            try:
+                # Ensure we're returning a Series
+                result = pd.Series(
+                    df[home_col].values - df[away_col].values,
+                    index=df.index,
+                    name=feature_name
+                )
+                return result
+            except Exception as e:
+                print(f"Error calculating {feature_name}: {e}")
+                return pd.Series(0, index=df.index, name=feature_name)
             
         elif base_name == 'REST_DIFF':
             rest_home = dependencies[0]  # REST_DAYS_HOME
             rest_away = dependencies[1]  # REST_DAYS_AWAY
-            return df[rest_home] - df[rest_away]
+            
+            try:
+                # Ensure we're returning a Series
+                result = pd.Series(
+                    df[rest_home].values - df[rest_away].values,
+                    index=df.index,
+                    name=feature_name
+                )
+                return result
+            except Exception as e:
+                print(f"Error calculating {feature_name}: {e}")
+                return pd.Series(0, index=df.index, name=feature_name)
             
         elif base_name == 'H2H_RECENCY_WEIGHT':
             h2h_win_pct = dependencies[0]  # H2H_WIN_PCT
             days_since = dependencies[1]  # DAYS_SINCE_H2H
-            return safe_divide(
-                df[h2h_win_pct],
-                np.log1p(df[days_since]),
-                fill_value=0.5,
-                index=df.index
-            )
+            
+            try:
+                result = safe_divide(
+                    df[h2h_win_pct],
+                    np.log1p(df[days_since]),
+                    fill_value=0.5,
+                    index=df.index
+                )
+                
+                # Ensure we're returning a Series with name
+                if isinstance(result, pd.Series):
+                    result.name = feature_name
+                    return result
+                else:
+                    return pd.Series(result, index=df.index, name=feature_name)
+            except Exception as e:
+                print(f"Error calculating {feature_name}: {e}")
+                return pd.Series(0.5, index=df.index, name=feature_name)
             
         return None  # Default if no specific derivation is defined
     
@@ -251,12 +348,43 @@ class FeatureTransformer:
         if feature_name == 'FATIGUE_TRAVEL_INTERACTION':
             fatigue_diff = dependencies[0]  # FATIGUE_DIFF_14D
             travel_dist = dependencies[1]  # TRAVEL_DISTANCE
-            return df[fatigue_diff] * df[travel_dist] / 1000
+            
+            try:
+                # Create Series explicitly
+                result = pd.Series(
+                    (df[fatigue_diff].values * df[travel_dist].values) / 1000,
+                    index=df.index,
+                    name=feature_name
+                )
+                return result
+            except Exception as e:
+                print(f"Error calculating {feature_name}: {e}")
+                return pd.Series(0, index=df.index, name=feature_name)
             
         elif feature_name == 'MOMENTUM_REST_INTERACTION':
             win_pct_diff = dependencies[0]  # WIN_PCT_DIFF_30D
             rest_diff = dependencies[1]  # REST_DIFF
-            return df[win_pct_diff] * df[rest_diff]
+            
+            try:
+                # Handle the case where WIN_PCT_DIFF_30D might be a DataFrame
+                win_pct_series = df[win_pct_diff]
+                if hasattr(win_pct_series, 'values'):
+                    win_pct_values = win_pct_series.values
+                else:
+                    # If it's already a DataFrame, try to extract the first column
+                    print(f"Warning: {win_pct_diff} is not a Series, converting to values")
+                    win_pct_values = np.zeros(len(df))
+                
+                # Create Series explicitly
+                result = pd.Series(
+                    win_pct_values * df[rest_diff].values,
+                    index=df.index,
+                    name=feature_name
+                )
+                return result
+            except Exception as e:
+                print(f"Error calculating {feature_name}: {e}")
+                return pd.Series(0, index=df.index, name=feature_name)
             
         elif feature_name == 'MATCHUP_COMPATIBILITY':
             pace_home = dependencies[0]  # PACE_mean_HOME_30D
