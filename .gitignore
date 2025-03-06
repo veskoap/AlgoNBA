@@ -42,3 +42,5 @@ ENV/
 *.pkl
 *.pt
 *.model
+
+CHANGELOG.md
