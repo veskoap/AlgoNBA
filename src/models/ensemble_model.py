@@ -23,6 +23,7 @@ class NBAEnsembleModel:
         self.feature_importances = {}
         self.selected_features = {}
         self.feature_importance_summary = {}
+        self.training_features = []  # Store the original feature names from training
         
     def train(self, X: pd.DataFrame) -> None:
         """
@@ -36,6 +37,9 @@ class NBAEnsembleModel:
         # Extract target variable
         y = X['TARGET']
         X = X.drop(['TARGET', 'GAME_DATE'], axis=1, errors='ignore')
+        
+        # Store the original feature names for later prediction use
+        self.training_features = X.columns.tolist()
 
         print(f"Training with {len(X)} samples and {len(X.columns)} features")
 
@@ -92,6 +96,10 @@ class NBAEnsembleModel:
             scaler = StandardScaler()
             X_train_scaled = scaler.fit_transform(X_train)
             X_val_scaled = scaler.transform(X_val)
+            
+            # Store feature names in the scaler for easier debugging
+            if not hasattr(scaler, 'feature_names_in_'):
+                setattr(scaler, 'feature_names_in_', np.array(X_train.columns))
 
             # Use stable features
             feature_mask = X.columns.isin(stable_features)
@@ -228,73 +236,112 @@ class NBAEnsembleModel:
         # Drop non-feature columns
         X = X.drop(['TARGET', 'GAME_DATE'], axis=1, errors='ignore')
         
+        # Ensure X has all training features in the correct order
+        if not hasattr(self, 'training_features') or not self.training_features:
+            # If training_features wasn't saved, try to infer from the first fold's scaler
+            if self.models and self.models[0] and self.models[0][1]:
+                # Try to get feature names from the scaler
+                if hasattr(self.models[0][1], 'feature_names_in_'):
+                    self.training_features = self.models[0][1].feature_names_in_.tolist()
+                else:
+                    print("Warning: Unable to determine original training features. Prediction may be inaccurate.")
+        
         # Get predictions from each fold's ensemble
         all_fold_preds = []
         
-        try:
-            for fold_idx, (window_models, scaler, stable_features) in enumerate(self.models):
-                print(f"Processing fold {fold_idx+1} prediction...")
+        for fold_idx, (window_models, scaler, stable_features) in enumerate(self.models):
+            print(f"Processing fold {fold_idx+1} prediction...")
+            
+            try:
+                # Create a new DataFrame with the exact features needed
+                X_aligned = pd.DataFrame(index=X.index)
                 
-                # In case of feature mismatch, try direct prediction with manual alignment
+                # Add each expected feature, with a default of 0 if missing
+                for feature in stable_features:
+                    if feature in X.columns:
+                        X_aligned[feature] = X[feature].values
+                    else:
+                        X_aligned[feature] = np.zeros(len(X))
+                
+                # Scale the aligned features
                 try:
-                    # Create a new DataFrame with the exact features needed
-                    X_aligned = pd.DataFrame(index=X.index)
-                    
-                    # Add each expected feature, with a default of 0 if missing
-                    for feature in stable_features:
-                        if feature in X.columns:
-                            X_aligned[feature] = X[feature].values
-                        else:
-                            X_aligned[feature] = np.zeros(len(X))
-                    
-                    # Scale the aligned features
-                    try:
-                        X_scaled = scaler.transform(X_aligned)
-                    except Exception as e:
-                        print(f"Warning: Scaling error: {e}, trying alternative approach")
-                        # If scaler fails, just normalize the data
-                        X_scaled = (X_aligned - X_aligned.mean()) / X_aligned.std().replace(0, 1)
-                        X_scaled = X_scaled.fillna(0).to_numpy()
-                    
-                    # Get predictions from each window model
-                    window_preds = []
-                    for window_info, model, features in window_models:
-                        print(f"  - Using {window_info} window model")
-                        # Get indices of features used by this model
-                        feature_indices = [i for i, f in enumerate(stable_features) if f in features]
-                        
-                        if feature_indices:
-                            # Extract the appropriate feature subset
-                            X_model_input = X_scaled[:, feature_indices]
-                            
-                            # Make predictions
-                            try:
-                                # Try direct predict_proba
-                                preds = model.predict_proba(X_model_input)[:, 1]
-                            except Exception as e1:
-                                try:
-                                    # Fallback to xgboost DMatrix approach
-                                    import xgboost as xgb
-                                    dmatrix = xgb.DMatrix(X_model_input)
-                                    preds = model.predict(dmatrix)
-                                except Exception as e2:
-                                    print(f"Warning: Model prediction error: {e1}, {e2}")
-                                    # Last resort default prediction
-                                    preds = np.full(len(X), 0.5)
-                            
-                            window_preds.append(preds)
-                    
-                    # Average predictions across window models
-                    if window_preds:
-                        fold_preds = np.mean(window_preds, axis=0)
-                        all_fold_preds.append(fold_preds)
-                
+                    X_scaled = scaler.transform(X_aligned)
                 except Exception as e:
-                    print(f"Warning: Error in fold {fold_idx+1} prediction: {e}")
-                    # Add a backup default prediction
+                    # Create a more detailed error message with missing feature information
+                    missing_features = []
+                    if hasattr(scaler, 'feature_names_in_'):
+                        expected = set(scaler.feature_names_in_)
+                        actual = set(X_aligned.columns)
+                        missing_features = list(expected - actual)
+                    
+                    print(f"Warning: Scaling error: {e}")
+                    if missing_features:
+                        print(f"Missing features: {missing_features[:5]}...")
+                    
+                    # Fallback to standard normalization
+                    X_scaled = (X_aligned - X_aligned.mean()) / (X_aligned.std().replace(0, 1))
+                    X_scaled = X_scaled.fillna(0).values
+                
+                # Get predictions from each window model
+                window_preds = []
+                for window_info, model, features in window_models:
+                    # Get indices of features used by this model
+                    feature_indices = [i for i, f in enumerate(stable_features) if f in features]
+                    
+                    if feature_indices:
+                        # Extract the appropriate feature subset
+                        X_model_input = X_scaled[:, feature_indices]
+                        
+                        # Make predictions
+                        try:
+                            # Try direct predict_proba
+                            preds = model.predict_proba(X_model_input)[:, 1]
+                            window_preds.append(preds)
+                        except Exception as e1:
+                            try:
+                                # Create prediction directly using booster
+                                import xgboost as xgb
+                                import numpy as np
+                                feature_subset = [stable_features[i] for i in feature_indices]
+                                
+                                # Ensure we're passing a proper numpy array to DMatrix
+                                if isinstance(X_model_input, np.ndarray):
+                                    X_input_array = X_model_input
+                                else:
+                                    X_input_array = np.array(X_model_input)
+                                
+                                # Try using the model's booster directly
+                                try:
+                                    # Extract the model's booster for direct prediction
+                                    if hasattr(model, 'get_booster'):
+                                        booster = model.get_booster()
+                                        dmatrix = xgb.DMatrix(X_input_array)
+                                        preds = booster.predict(dmatrix)
+                                        window_preds.append(preds)
+                                    else:
+                                        # Fallback to direct numpy prediction
+                                        preds = model.predict(X_input_array)
+                                        window_preds.append(preds)
+                                except Exception as e3:
+                                    print(f"Warning: XGBoost prediction error: {e3}")
+                                    window_preds.append(np.full(len(X), 0.5))
+                            except Exception as e2:
+                                print(f"Warning: Model prediction error: Feature shape mismatch, expected: {len(features)}, got {len(feature_indices)}, {e2}")
+                                # Last resort default prediction
+                                window_preds.append(np.full(len(X), 0.5))
+                
+                # Average predictions across window models
+                if window_preds:
+                    fold_preds = np.mean(window_preds, axis=0)
+                    all_fold_preds.append(fold_preds)
+                else:
+                    # If no window model worked, use a default prediction
                     all_fold_preds.append(np.full(len(X), 0.5))
-        except Exception as e:
-            print(f"Error in ensemble prediction: {e}")
+            
+            except Exception as e:
+                print(f"Warning: Error in fold {fold_idx+1} prediction: {e}")
+                # Add a backup default prediction
+                all_fold_preds.append(np.full(len(X), 0.5))
         
         # Average predictions across folds
         if all_fold_preds:

@@ -120,7 +120,7 @@ class EnhancedNBAPredictor:
                                 away_team_id: int,
                                 game_date: Optional[str] = None) -> pd.DataFrame:
         """
-        Prepare features for a specific game prediction.
+        Prepare features for a specific game prediction with improved feature compatibility.
         
         Args:
             home_team_id: NBA API team ID for home team
@@ -200,30 +200,149 @@ class EnhancedNBAPredictor:
         # Get features from the feature processor
         print("Generating prediction features...")
         
-        # Instead of using prepare_enhanced_features, we'll directly reuse features from training data
+        # Get required features from the training models
+        required_features = set()
+        
+        # From ensemble model
+        if hasattr(self.ensemble_model, 'training_features'):
+            required_features.update(self.ensemble_model.training_features)
+        
+        # From deep model
+        if hasattr(self.deep_model_trainer, 'training_features'):
+            required_features.update(self.deep_model_trainer.training_features)
+            
+        # If we have a record of the training features
         if self.features is not None:
-            # Create a template from the training features
-            prediction_features = pd.DataFrame(index=[0])
-            prediction_features['GAME_DATE'] = game_date
+            feature_cols = [col for col in self.features.columns if col not in ['GAME_DATE', 'TARGET']]
+            required_features.update(feature_cols)
+        
+        # Create a new features DataFrame with the game date
+        prediction_features = pd.DataFrame(index=[0])
+        prediction_features['GAME_DATE'] = game_date
+        
+        # Generate base features using the feature processor
+        base_features = self.feature_processor.prepare_enhanced_features(game_df)
+        
+        # Copy all features from base_features
+        for col in base_features.columns:
+            if col != 'TARGET':  # Skip target column
+                prediction_features[col] = base_features[col].values
+        
+        # Add specifically identified missing features
+        # PACE differentials
+        for window in self.lookback_windows:
+            window_str = f'_{window}D'
+            pace_diff_col = f'PACE_DIFF{window_str}'
             
-            # Calculate common base features using the feature processor
-            base_features = self.feature_processor.prepare_enhanced_features(game_df)
-            
-            # For each column in the training features, try to find a match or use a default
-            for col in self.features.columns:
-                if col == 'GAME_DATE' or col == 'TARGET':
-                    continue
-                    
-                if col in base_features.columns:
-                    prediction_features[col] = base_features[col].iloc[0]
+            # If PACE_DIFF is missing but required
+            if pace_diff_col in required_features and pace_diff_col not in prediction_features.columns:
+                home_pace_col = f'PACE_mean_HOME{window_str}'
+                away_pace_col = f'PACE_mean_AWAY{window_str}'
+                
+                # If we have the component values
+                if home_pace_col in prediction_features.columns and away_pace_col in prediction_features.columns:
+                    prediction_features[pace_diff_col] = (
+                        prediction_features[home_pace_col] - prediction_features[away_pace_col]
+                    )
                 else:
-                    # Try to find the feature in the stats dataframe
-                    prediction_features[col] = 0  # default value
+                    # Otherwise use a default
+                    prediction_features[pace_diff_col] = 0
+        
+        # H2H_RECENCY_WEIGHT
+        if 'H2H_RECENCY_WEIGHT' in required_features and 'H2H_RECENCY_WEIGHT' not in prediction_features.columns:
+            if 'H2H_WIN_PCT' in prediction_features.columns and 'DAYS_SINCE_H2H' in prediction_features.columns:
+                import numpy as np
+                # Safely calculate the recency weight
+                days = max(1, prediction_features['DAYS_SINCE_H2H'].iloc[0])
+                prediction_features['H2H_RECENCY_WEIGHT'] = (
+                    prediction_features['H2H_WIN_PCT'].iloc[0] / np.log1p(days)
+                )
+            else:
+                prediction_features['H2H_RECENCY_WEIGHT'] = 0.5
+                
+        # Add all consistency features
+        for window in self.lookback_windows:
+            window_str = f'_{window}D'
+            for location in ['HOME', 'AWAY']:
+                # For each consistency feature
+                consistency_feat = f'{location}_CONSISTENCY{window_str}'
+                if consistency_feat in required_features and consistency_feat not in prediction_features.columns:
+                    # Try to derive from PTS_mean and PTS_std if available
+                    pts_mean_col = f'PTS_mean_{location}{window_str}'
+                    pts_std_col = f'PTS_std_{location}{window_str}'
+                    
+                    if pts_mean_col in prediction_features.columns and pts_std_col in prediction_features.columns:
+                        # Only calculate if mean is non-zero
+                        if prediction_features[pts_mean_col].iloc[0] > 0:
+                            prediction_features[consistency_feat] = (
+                                prediction_features[pts_std_col].iloc[0] / 
+                                prediction_features[pts_mean_col].iloc[0]
+                            )
+                        else:
+                            prediction_features[consistency_feat] = 0.5
+                    else:
+                        prediction_features[consistency_feat] = 0.5  # Middle value for default
+        
+        # Add all FATIGUE_DIFF features
+        for window in self.lookback_windows:
+            window_str = f'_{window}D'
+            fatigue_diff_col = f'FATIGUE_DIFF{window_str}'
             
-            return prediction_features
-        else:
-            # Fallback to regular feature processing
-            return self.feature_processor.prepare_enhanced_features(game_df)
+            if fatigue_diff_col in required_features and fatigue_diff_col not in prediction_features.columns:
+                home_fatigue_col = f'FATIGUE_HOME{window_str}'
+                away_fatigue_col = f'FATIGUE_AWAY{window_str}'
+                
+                if home_fatigue_col in prediction_features.columns and away_fatigue_col in prediction_features.columns:
+                    prediction_features[fatigue_diff_col] = (
+                        prediction_features[home_fatigue_col] - prediction_features[away_fatigue_col]
+                    )
+                else:
+                    prediction_features[fatigue_diff_col] = 0
+        
+        # Add all WIN_PCT_DIFF features
+        for window in self.lookback_windows:
+            window_str = f'_{window}D'
+            win_pct_diff_col = f'WIN_PCT_DIFF{window_str}'
+            
+            if win_pct_diff_col in required_features and win_pct_diff_col not in prediction_features.columns:
+                home_win_pct_col = f'WIN_PCT_HOME{window_str}'
+                away_win_pct_col = f'WIN_PCT_AWAY{window_str}'
+                
+                if home_win_pct_col in prediction_features.columns and away_win_pct_col in prediction_features.columns:
+                    prediction_features[win_pct_diff_col] = (
+                        prediction_features[home_win_pct_col] - prediction_features[away_win_pct_col]
+                    )
+                else:
+                    prediction_features[win_pct_diff_col] = 0
+                    
+        # Add all Rating (RTG) differential features
+        for rtg_type in ['OFF_RTG', 'DEF_RTG', 'NET_RTG']:
+            for window in self.lookback_windows:
+                window_str = f'_{window}D'
+                rtg_diff_col = f'{rtg_type}_DIFF{window_str}'
+                
+                if rtg_diff_col in required_features and rtg_diff_col not in prediction_features.columns:
+                    home_rtg_col = f'{rtg_type}_mean_HOME{window_str}'
+                    away_rtg_col = f'{rtg_type}_mean_AWAY{window_str}'
+                    
+                    if home_rtg_col in prediction_features.columns and away_rtg_col in prediction_features.columns:
+                        prediction_features[rtg_diff_col] = (
+                            prediction_features[home_rtg_col] - prediction_features[away_rtg_col]
+                        )
+                    else:
+                        prediction_features[rtg_diff_col] = 0
+        
+        # Add any remaining missing required features with default values
+        for col in required_features:
+            if col not in prediction_features.columns and col not in ['GAME_DATE', 'TARGET']:
+                prediction_features[col] = 0
+        
+        # Add head-to-head features if they're required but missing
+        for h2h_feat in ['H2H_GAMES', 'H2H_WIN_PCT', 'DAYS_SINCE_H2H', 'H2H_MOMENTUM', 'H2H_HOME_ADVANTAGE']:
+            if h2h_feat in required_features and h2h_feat not in prediction_features.columns:
+                prediction_features[h2h_feat] = 0 if h2h_feat != 'H2H_WIN_PCT' else 0.5
+        
+        return prediction_features
     
     def predict_game(self, 
                      home_team_id: int, 
@@ -231,7 +350,7 @@ class EnhancedNBAPredictor:
                      game_date: Optional[str] = None,
                      model_type: str = 'hybrid') -> Dict:
         """
-        Predict the outcome of a specific game.
+        Predict the outcome of a specific game with improved feature compatibility.
         
         Args:
             home_team_id: NBA API team ID for home team
@@ -242,35 +361,28 @@ class EnhancedNBAPredictor:
         Returns:
             dict: Prediction details
         """
-        # Prepare features for the game
+        # Prepare features for the game - already ensures required features are present
         game_features = self.prepare_game_prediction(home_team_id, away_team_id, game_date)
         
-        # Ensure feature compatibility with the trained model
-        # Get all feature columns from the training data
+        # Ensure model is trained
         if self.features is None:
             raise ValueError("Model not trained properly. Call train_models first.")
-            
-        # Match columns to training data
-        training_columns = [col for col in self.features.columns if col not in ['GAME_DATE', 'TARGET']]
         
-        # Create a new DataFrame with the same columns as the training data
-        prediction_features = pd.DataFrame(index=game_features.index)
+        # Make prediction with the prepared feature set
+        # The models' predict methods handle feature alignment internally now
+        probs, confidence = self.predict(game_features, model_type)
         
-        # Copy existing columns
-        for col in training_columns:
-            if col in game_features.columns:
-                prediction_features[col] = game_features[col]
-            else:
-                # Add missing columns with default values
-                prediction_features[col] = 0
-        
-        # Make prediction with the compatible feature set
-        probs, confidence = self.predict(prediction_features, model_type)
+        # Get team abbreviations for better output
+        from src.utils.constants import TEAM_ID_TO_ABBREV
+        home_team_abbrev = TEAM_ID_TO_ABBREV.get(home_team_id, str(home_team_id))
+        away_team_abbrev = TEAM_ID_TO_ABBREV.get(away_team_id, str(away_team_id))
         
         # Format output
         result = {
             'home_team_id': home_team_id,
             'away_team_id': away_team_id,
+            'home_team': home_team_abbrev,
+            'away_team': away_team_abbrev,
             'game_date': game_features['GAME_DATE'].iloc[0],
             'home_win_probability': float(probs[0]),
             'confidence': float(confidence[0]),

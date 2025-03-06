@@ -61,6 +61,7 @@ class DeepModelTrainer:
         """Initialize the deep model trainer."""
         self.models = []
         self.scalers = []
+        self.training_features = []  # Store original feature names
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         
     def train_deep_model(self, X: pd.DataFrame) -> Tuple[List, List]:
@@ -78,6 +79,9 @@ class DeepModelTrainer:
         # Extract target variable
         y = X['TARGET']
         X = X.drop(['TARGET', 'GAME_DATE'], axis=1, errors='ignore')
+        
+        # Store original feature names for later prediction
+        self.training_features = X.columns.tolist()
 
         print(f"Training deep model with {len(X)} samples and {len(X.columns)} features")
         print(f"Using device: {self.device}")
@@ -98,6 +102,10 @@ class DeepModelTrainer:
             scaler = StandardScaler()
             X_train_scaled = scaler.fit_transform(X_train)
             X_val_scaled = scaler.transform(X_val)
+            
+            # Store feature names in the scaler for easier debugging
+            if not hasattr(scaler, 'feature_names_in_'):
+                setattr(scaler, 'feature_names_in_', np.array(X_train.columns))
 
             # Convert to PyTorch tensors
             X_train_tensor = torch.FloatTensor(X_train_scaled).to(self.device)
@@ -199,33 +207,54 @@ class DeepModelTrainer:
         # Drop non-feature columns
         X = X.drop(['TARGET', 'GAME_DATE'], axis=1, errors='ignore')
         
+        # Ensure we have the training features to align with
+        if not hasattr(self, 'training_features') or not self.training_features:
+            # If training_features wasn't stored, try to infer from first scaler
+            if self.scalers and hasattr(self.scalers[0], 'feature_names_in_'):
+                self.training_features = self.scalers[0].feature_names_in_.tolist()
+            else:
+                print("Warning: No training features available. Prediction may be inaccurate.")
+                
         # Get predictions from each model in the ensemble
         all_preds = []
         
-        for model, scaler in zip(self.models, self.scalers):
+        for fold_idx, (model, scaler) in enumerate(zip(self.models, self.scalers)):
             try:
-                # Ensure X has all columns the scaler expects
+                # Determine expected columns for this fold's scaler
                 expected_cols = None
                 if hasattr(scaler, 'feature_names_in_'):
                     expected_cols = scaler.feature_names_in_
-                elif hasattr(scaler, 'get_feature_names_out'):
-                    expected_cols = scaler.get_feature_names_out()
-                    
+                elif self.training_features:
+                    expected_cols = self.training_features
+                
                 if expected_cols is not None:
-                    # Create a temporary DataFrame with the expected columns
-                    X_temp = pd.DataFrame(index=X.index)
+                    # Create a temporary DataFrame with the expected columns in correct order
+                    X_aligned = pd.DataFrame(index=X.index)
                     for col in expected_cols:
                         if col in X.columns:
-                            X_temp[col] = X[col]
+                            X_aligned[col] = X[col]
                         else:
-                            X_temp[col] = 0
+                            X_aligned[col] = 0
                     
                     # Scale features
-                    X_scaled = scaler.transform(X_temp)
+                    try:
+                        X_scaled = scaler.transform(X_aligned)
+                    except Exception as e:
+                        print(f"Warning: Scaling error in fold {fold_idx+1}: {e}")
+                        # Fall back to simple normalization
+                        X_scaled = (X_aligned - X_aligned.mean()) / X_aligned.std().replace(0, 1)
+                        X_scaled = X_scaled.fillna(0).values
                 else:
                     # If we can't determine expected columns, try direct transform
-                    X_scaled = scaler.transform(X)
-                    
+                    try:
+                        X_scaled = scaler.transform(X)
+                    except Exception as e:
+                        print(f"Warning: Direct scaling error in fold {fold_idx+1}: {e}")
+                        # Just standardize the data as a fallback
+                        X_scaled = (X - X.mean()) / X.std().replace(0, 1)
+                        X_scaled = X_scaled.fillna(0).values
+                
+                # Convert to tensor
                 X_tensor = torch.FloatTensor(X_scaled).to(self.device)
                 
                 # Make predictions
@@ -235,7 +264,7 @@ class DeepModelTrainer:
                     probs = torch.softmax(outputs, dim=1)[:, 1].cpu().numpy()
                     all_preds.append(probs)
             except Exception as e:
-                print(f"Error in deep model prediction: {e}")
+                print(f"Error in deep model prediction for fold {fold_idx+1}: {e}")
                 # Add default predictions in case of error
                 all_preds.append(np.full(len(X), 0.5))
                 
@@ -245,5 +274,6 @@ class DeepModelTrainer:
         else:
             # Default prediction if no models could be used
             ensemble_preds = np.full(len(X), 0.5)
+            print("Warning: Using default predictions (0.5) as all models failed")
         
         return ensemble_preds
