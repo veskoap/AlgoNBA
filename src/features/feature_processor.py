@@ -1338,25 +1338,52 @@ class NBAFeatureProcessor:
         enhanced_features = enhanced_features.replace([np.inf, -np.inf], np.nan)
         enhanced_features = enhanced_features.fillna(0)
         
-        # Clip extreme values for numerical columns
+        # Clip extreme values for numerical columns with error handling
         for col in enhanced_features.columns:
-            if col not in ['GAME_DATE', 'TARGET'] and enhanced_features[col].dtype in [np.float64, np.int64]:
-                q1 = enhanced_features[col].quantile(0.01)
-                q99 = enhanced_features[col].quantile(0.99)
-                enhanced_features[col] = enhanced_features[col].clip(q1, q99)
+            if col not in ['GAME_DATE', 'TARGET']:
+                try:
+                    # Check if column is numeric
+                    col_dtype = enhanced_features[col].dtype
+                    if col_dtype in [np.float64, np.int64]:
+                        # Get quantile values with error handling
+                        try:
+                            q1 = enhanced_features[col].quantile(0.01)
+                            q99 = enhanced_features[col].quantile(0.99)
+                            # Clip values between the 1st and 99th percentiles
+                            enhanced_features[col] = enhanced_features[col].clip(q1, q99)
+                        except Exception as e:
+                            print(f"Skipping clipping for column {col}: {str(e)}")
+                except Exception as e:
+                    print(f"Error checking numeric type for column {col}: {str(e)}")
         
-        # Print feature summary
-        feature_cols = [col for col in enhanced_features.columns 
-                       if col not in ['GAME_DATE'] and enhanced_features[col].dtype in [np.float64, np.int64]]
+        # Print feature summary with error handling
+        feature_cols = []
+        for col in enhanced_features.columns:
+            if col not in ['GAME_DATE']:
+                try:
+                    if enhanced_features[col].dtype in [np.float64, np.int64]:
+                        feature_cols.append(col)
+                except Exception as e:
+                    print(f"Error checking dtype for feature column {col}: {str(e)}")
         print(f"\nCreated {len(feature_cols)} features:")
         for prefix, description in FEATURE_GROUPS.items():
             related_features = [col for col in feature_cols if prefix in col]
             print(f"{description}: {len(related_features)} features")
         
         # Remove any non-numeric columns that would cause issues with XGBoost
-        # Specifically exclude object columns and datetime columns
-        non_numeric_cols = [col for col in enhanced_features.columns 
-                           if col != 'TARGET' and enhanced_features[col].dtype not in [np.float64, np.int64, bool, 'float32', 'int32']]
+        # Specifically exclude object columns and datetime columns with error handling
+        non_numeric_cols = []
+        for col in enhanced_features.columns:
+            if col != 'TARGET':
+                try:
+                    # Check column type safely
+                    col_dtype = enhanced_features[col].dtype
+                    if col_dtype not in [np.float64, np.int64, bool, 'float32', 'int32']:
+                        non_numeric_cols.append(col)
+                except Exception as e:
+                    print(f"Error checking dtype for exclusion column {col}: {str(e)}")
+                    # Conservatively exclude columns with errors
+                    non_numeric_cols.append(col)
         
         if non_numeric_cols:
             print(f"Removing {len(non_numeric_cols)} non-numeric columns: {non_numeric_cols[:5]}...")
@@ -1414,8 +1441,19 @@ class NBAFeatureProcessor:
             
             # Remove any non-numeric columns that would cause issues with machine learning models
             # Preserve GAME_DATE for reference, even though it's not used in the model
-            non_numeric_cols = [col for col in features.columns 
-                              if col != 'TARGET' and col != 'GAME_DATE' and features[col].dtype not in [np.float64, np.int64, bool, 'float32', 'int32']]
+            # Check column dtypes with better error handling
+            non_numeric_cols = []
+            for col in features.columns:
+                if col != 'TARGET' and col != 'GAME_DATE':
+                    try:
+                        # Safely check datatype 
+                        col_dtype = features[col].dtype
+                        if col_dtype not in [np.float64, np.int64, bool, 'float32', 'int32']:
+                            non_numeric_cols.append(col)
+                    except Exception as e:
+                        print(f"Error checking dtype for column {col}: {str(e)}")
+                        # Assume it's not numeric if we can't check
+                        non_numeric_cols.append(col)
             
             if non_numeric_cols:
                 print(f"Removing {len(non_numeric_cols)} non-numeric columns for ML compatibility: {non_numeric_cols[:5]}...")
@@ -1433,8 +1471,15 @@ class NBAFeatureProcessor:
                 print(f"Replacing {inf_values} infinite values with large numbers")
                 features = features.replace([np.inf, -np.inf], [1e9, -1e9])
             
-            numeric_feature_count = sum(features[col].dtype in [np.float64, np.int64, bool, 'float32', 'int32'] 
-                                      for col in features.columns if col != 'TARGET')
+            # Count numeric features with safer error handling
+            numeric_feature_count = 0
+            for col in features.columns:
+                if col != 'TARGET':
+                    try:
+                        if features[col].dtype in [np.float64, np.int64, bool, 'float32', 'int32']:
+                            numeric_feature_count += 1
+                    except Exception as e:
+                        print(f"Error checking numeric type for column {col}: {str(e)}")
             print(f"Successfully created {numeric_feature_count} numeric features")
             return features
             

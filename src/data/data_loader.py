@@ -175,8 +175,39 @@ class NBADataLoader:
                 home = bulk_games[bulk_games['MATCHUP'].str.contains('vs')].copy()
                 away = bulk_games[bulk_games['MATCHUP'].str.contains('@')].copy()
                 
-                # Continue with normal processing
-                processed_games = self._process_home_away_games(home, away)
+                # Process home/away data (replace missing method with inline code)
+                print("Processing home and away game data...")
+                # Create home and away columns
+                home = home.add_suffix('_HOME')
+                away = away.add_suffix('_AWAY')
+                
+                # Rename GAME_DATE columns to avoid duplication
+                if 'GAME_DATE_HOME' in home.columns and 'GAME_DATE_AWAY' in away.columns:
+                    # Both DataFrames have date columns with suffixes
+                    pass
+                else:
+                    # Ensure column naming is consistent
+                    if 'GAME_DATE' in home.columns:
+                        home = home.rename(columns={'GAME_DATE': 'GAME_DATE_HOME'})
+                    if 'GAME_DATE' in away.columns:
+                        away = away.rename(columns={'GAME_DATE': 'GAME_DATE_AWAY'})
+                
+                # Merge home and away data on game ID and date
+                # Create a mapping key for joining
+                home['GAME_KEY'] = home['GAME_ID_HOME'].apply(lambda x: x.split('/')[0] if isinstance(x, str) else x)
+                away['GAME_KEY'] = away['GAME_ID_AWAY'].apply(lambda x: x.split('/')[0] if isinstance(x, str) else x)
+                
+                # Join on the common key
+                processed_games = pd.merge(home, away, left_on='GAME_KEY', right_on='GAME_KEY')
+                
+                # Clean up - delete the temporary join key
+                processed_games = processed_games.drop('GAME_KEY', axis=1, errors='ignore')
+                
+                # Add standardized GAME_DATE column using the home date
+                if 'GAME_DATE_HOME' in processed_games.columns:
+                    processed_games['GAME_DATE'] = processed_games['GAME_DATE_HOME']
+                elif 'GAME_DATE_AWAY' in processed_games.columns:
+                    processed_games['GAME_DATE'] = processed_games['GAME_DATE_AWAY']
                 
                 # Cache the result
                 if self.use_cache:
