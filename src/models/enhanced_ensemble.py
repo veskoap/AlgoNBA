@@ -102,7 +102,8 @@ class NBAEnhancedEnsembleModel:
                         learning_rate=0.05,
                         subsample=0.8,
                         colsample_bytree=0.8,
-                        random_state=seed + fold
+                        random_state=seed + fold,
+                        verbosity=0  # Suppress XGBoost warnings as well
                     ),
                     threshold='median'  # More strict threshold than default
                 )
@@ -193,7 +194,8 @@ class NBAEnhancedEnsembleModel:
                     scale_pos_weight=1,
                     random_state=42 + window,
                     eval_metric=['logloss', 'auc'],
-                    tree_method='hist'  # Faster training algorithm
+                    tree_method='hist',  # Faster training algorithm
+                    verbosity=0  # Suppress XGBoost warnings
                 )
 
                 X_train_window = X_train_selected[:, feature_indices]
@@ -215,7 +217,8 @@ class NBAEnhancedEnsembleModel:
                     reg_alpha=0.1,
                     reg_lambda=1.2,
                     random_state=53 + window,
-                    metric='auc'
+                    metric='auc',
+                    verbosity=-1  # Suppress warnings including "No further splits with positive gain"
                 )
                 
                 # Train LightGBM without early stopping for better compatibility
@@ -276,6 +279,7 @@ class NBAEnhancedEnsembleModel:
                     subsample=0.9,
                     colsample_bytree=0.9,
                     random_state=42 + fold,
+                    verbosity=0  # Suppress XGBoost warnings
                 )
                 
                 meta_model.fit(fold_base_preds, y_val)

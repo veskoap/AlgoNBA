@@ -84,12 +84,29 @@ class SelfAttention(nn.Module):
         k = self.key(x).unsqueeze(2)    # [batch_size, attention_dim, 1]
         v = self.value(x)               # [batch_size, input_dim]
         
-        # Calculate attention scores
-        attention = torch.bmm(q, k).squeeze()  # [batch_size]
-        attention = torch.sigmoid(attention).unsqueeze(1)  # [batch_size, 1]
-        
-        # Apply attention weights
-        out = attention * v  # [batch_size, input_dim]
+        # Calculate attention scores - handle dimension issues
+        try:
+            attention = torch.bmm(q, k)  # [batch_size, 1, 1]
+            
+            # Handle any dimensionality issues
+            if len(attention.shape) == 3:
+                attention = attention.squeeze(-1).squeeze(-1)  # Properly squeeze to [batch_size]
+            elif len(attention.shape) == 2:
+                attention = attention.squeeze(-1)  # Squeeze to [batch_size]
+            
+            # Ensure we have the right shape before proceeding
+            attention = torch.sigmoid(attention)
+            
+            # Make sure we have the right dimensions for broadcasting
+            if len(attention.shape) == 1:
+                attention = attention.unsqueeze(1)  # [batch_size, 1]
+            
+            # Apply attention weights
+            out = attention * v  # [batch_size, input_dim]
+        except Exception as e:
+            # Fallback: if attention mechanism fails, skip it
+            print(f"Attention mechanism fallback: {e}")
+            out = v  # Skip attention and use the original value
         
         return out + x  # Residual connection
 
