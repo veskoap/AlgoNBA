@@ -92,6 +92,14 @@ class HybridModel:
         
         print("\nOptimizing model integration weights with advanced metrics...")
         
+        # Set optimization mode flag on deep model to enable fast prediction path
+        if hasattr(self.deep_model, '_in_hybrid_optimization'):
+            # If flag already exists, just set it
+            self.deep_model._in_hybrid_optimization = True
+        else:
+            # Create the flag attribute
+            setattr(self.deep_model, '_in_hybrid_optimization', True)
+        
         # Extract target
         y = X['TARGET']
         
@@ -275,6 +283,16 @@ class HybridModel:
         
         # Store all weight results for potential adaptive weighting
         self.weight_results = weight_results
+        
+        # Remove optimization mode flag to restore normal prediction behavior
+        if hasattr(self.deep_model, '_in_hybrid_optimization'):
+            self.deep_model._in_hybrid_optimization = False
+        
+        # Clear caches to free memory
+        if hasattr(self.deep_model, '_pred_cache'):
+            self.deep_model._pred_cache.clear()
+        if hasattr(self.deep_model, '_uncertainty_cache'):
+            self.deep_model._uncertainty_cache.clear()
         
         print(f"\nOptimal ensemble weight: {optimal_weight:.2f} with combined score: {best_score:.4f}")
         print(f"Metrics at optimal weight: Accuracy={best_metrics['accuracy']:.4f}, "

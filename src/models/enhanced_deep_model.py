@@ -939,7 +939,7 @@ class EnhancedDeepModelTrainer:
     def predict(self, X: pd.DataFrame, mc_samples: int = 10) -> np.ndarray:
         """
         Make predictions using ensemble of enhanced deep models with uncertainty estimation.
-        GPU-optimized for faster inference.
+        GPU-optimized for faster inference, with caching for hybrid model optimization.
         
         Args:
             X: DataFrame containing features
@@ -950,6 +950,18 @@ class EnhancedDeepModelTrainer:
         """
         if not self.models or not self.scalers:
             raise ValueError("Models not trained yet. Call train_deep_model first.")
+            
+        # Optimization: Use prediction cache for identical inputs
+        # This greatly speeds up the hybrid model weight optimization
+        if hasattr(self, '_pred_cache'):
+            # Hash the dataframe to use as cache key
+            X_hash = hash(X.shape[0]) + hash(tuple(X.iloc[0].values)) + hash(tuple(X.iloc[-1].values))
+            if X_hash in self._pred_cache:
+                return self._pred_cache[X_hash]
+        else:
+            # Initialize cache dict
+            self._pred_cache = {}
+            X_hash = hash(X.shape[0]) + hash(tuple(X.iloc[0].values)) + hash(tuple(X.iloc[-1].values))
             
         # Drop non-feature columns
         X = X.drop(['TARGET', 'GAME_DATE'], axis=1, errors='ignore')
@@ -965,13 +977,26 @@ class EnhancedDeepModelTrainer:
         # Only print once for verbosity control
         print("Processing enhanced deep model predictions...")
         
+        # Speed optimization: If we have multiple models but are in optimization mode,
+        # just use the first model during hybrid model weight optimization
+        num_models = len(self.models)
+        if hasattr(self, '_in_hybrid_optimization') and self._in_hybrid_optimization:
+            # Just use one model for speed
+            models_to_use = 1
+        else:
+            models_to_use = num_models
+        
+        # Larger batch size for A100
+        if torch.cuda.is_available() and "A100" in torch.cuda.get_device_name(0):
+            batch_size = min(256, len(X))  # Much larger batch for A100
+        else:
+            batch_size = min(64, len(X))  # Standard batch size
+            
         # Get predictions from each model in the ensemble
         all_preds = []
         
-        # Batch processing for predictions to fully utilize GPU
-        batch_size = min(64, len(X))  # Smaller batch size for inference
-        
-        for fold_idx, (model, scaler) in enumerate(zip(self.models, self.scalers)):
+        # Process only the requested number of models
+        for fold_idx, (model, scaler) in enumerate(zip(self.models[:models_to_use], self.scalers[:models_to_use])):
             try:
                 # Align features with model's expected input
                 X_aligned = self._prepare_aligned_features(X, scaler, fold_idx)
@@ -979,15 +1004,25 @@ class EnhancedDeepModelTrainer:
                 # Scale features 
                 X_scaled = self._scale_features(X_aligned, scaler, fold_idx)
                 
-                # If using Monte Carlo dropout, run multiple predictions
-                if self.use_mc_dropout:
-                    model_preds = self._run_mc_dropout_prediction(model, X_scaled, mc_samples, batch_size)
+                # Optimization: Disable MC dropout during hybrid model optimization
+                use_mc = self.use_mc_dropout and not hasattr(self, '_in_hybrid_optimization')
+                
+                # If using Monte Carlo dropout, run multiple predictions (but fewer samples when optimizing)
+                if use_mc:
+                    # Use fewer samples in optimization mode
+                    actual_samples = mc_samples if not hasattr(self, '_in_hybrid_optimization') else 3
+                    model_preds = self._run_mc_dropout_prediction(model, X_scaled, actual_samples, batch_size)
                 else:
                     # Standard batch prediction without MC dropout
                     model_preds = self._run_standard_prediction(model, X_scaled, batch_size)
                 
                 # Add model predictions to ensemble
                 all_preds.append(model_preds)
+                
+                # If we only need one model for optimization, stop after the first one
+                if hasattr(self, '_in_hybrid_optimization') and fold_idx == 0:
+                    break
+                    
             except Exception as e:
                 if fold_idx == 0:  # Only print for first fold
                     print(f"Error in enhanced deep model prediction: {e}")
@@ -1012,6 +1047,16 @@ class EnhancedDeepModelTrainer:
             # Replace NaNs with default probability of 0.5
             ensemble_preds = np.nan_to_num(ensemble_preds, nan=0.5)
         
+        # Store in cache for repeated calls with the same data
+        self._pred_cache[X_hash] = ensemble_preds
+        
+        # Limit cache size to prevent memory issues
+        if len(self._pred_cache) > 10:
+            # Remove oldest entries (first ones added)
+            keys_to_remove = list(self._pred_cache.keys())[:-10]
+            for key in keys_to_remove:
+                del self._pred_cache[key]
+                
         return ensemble_preds
         
     def _prepare_aligned_features(self, X: pd.DataFrame, scaler, fold_idx: int) -> pd.DataFrame:
@@ -1276,7 +1321,7 @@ class EnhancedDeepModelTrainer:
     def predict_with_uncertainty(self, X: pd.DataFrame, mc_samples: int = 30) -> Tuple[np.ndarray, np.ndarray]:
         """
         Make predictions with uncertainty estimates using Monte Carlo dropout.
-        GPU-optimized for faster inference.
+        GPU-optimized for faster inference with caching for hybrid model optimization.
         
         Args:
             X: DataFrame containing features
@@ -1287,6 +1332,17 @@ class EnhancedDeepModelTrainer:
         """
         if not self.models or not self.scalers:
             raise ValueError("Models not trained yet. Call train_deep_model first.")
+        
+        # Optimization: Use prediction cache for identical inputs during optimization
+        if hasattr(self, '_uncertainty_cache'):
+            # Hash the dataframe to use as cache key
+            X_hash = hash(X.shape[0]) + hash(tuple(X.iloc[0].values)) + hash(tuple(X.iloc[-1].values))
+            if X_hash in self._uncertainty_cache:
+                return self._uncertainty_cache[X_hash]
+        else:
+            # Initialize cache dict
+            self._uncertainty_cache = {}
+            X_hash = hash(X.shape[0]) + hash(tuple(X.iloc[0].values)) + hash(tuple(X.iloc[-1].values))
             
         # Drop non-feature columns
         X = X.drop(['TARGET', 'GAME_DATE'], axis=1, errors='ignore')
@@ -1294,14 +1350,27 @@ class EnhancedDeepModelTrainer:
         # Only print once for verbosity control
         print("Processing enhanced deep model predictions with uncertainty...")
         
+        # Speed optimization: If in hybrid model optimization, use fewer models and samples
+        if hasattr(self, '_in_hybrid_optimization') and self._in_hybrid_optimization:
+            # Use fewer MC samples and only the first model during optimization
+            actual_samples = min(5, mc_samples)  # Much smaller sample count
+            models_to_use = 1  # Just use one model
+        else:
+            actual_samples = mc_samples
+            models_to_use = len(self.models)
+            
         # Get predictions and uncertainties from each model
         all_model_predictions = []
         all_model_uncertainties = []
         
-        # Batch processing for predictions
-        batch_size = min(64, len(X))  # Use smaller batch size for inference
+        # Batch processing for predictions with larger batch size for A100
+        if torch.cuda.is_available() and "A100" in torch.cuda.get_device_name(0):
+            batch_size = min(256, len(X))  # Much larger batch for A100
+        else:
+            batch_size = min(64, len(X))  # Standard batch size
         
-        for fold_idx, (model, scaler) in enumerate(zip(self.models, self.scalers)):
+        # Only process the number of models we need
+        for fold_idx, (model, scaler) in enumerate(zip(self.models[:models_to_use], self.scalers[:models_to_use])):
             try:
                 # Prepare and align features
                 X_aligned = self._prepare_aligned_features(X, scaler, fold_idx)
@@ -1309,8 +1378,8 @@ class EnhancedDeepModelTrainer:
                 # Scale features
                 X_scaled = self._scale_features(X_aligned, scaler, fold_idx)
                 
-                # Generate MC dropout samples
-                mc_samples_list = self._run_mc_dropout_samples(model, X_scaled, mc_samples, batch_size)
+                # Generate MC dropout samples - fewer samples in optimization mode
+                mc_samples_list = self._run_mc_dropout_samples(model, X_scaled, actual_samples, batch_size)
                 
                 # Calculate mean and uncertainty from samples
                 if mc_samples_list:
@@ -1328,6 +1397,10 @@ class EnhancedDeepModelTrainer:
                 else:
                     # Fallback if MC sampling failed
                     raise ValueError("MC sampling failed to produce valid results")
+                    
+                # If we're in optimization mode, one model is enough
+                if hasattr(self, '_in_hybrid_optimization') and fold_idx == 0:
+                    break
                 
             except Exception as e:
                 if fold_idx == 0:  # Only print first error to reduce verbosity
@@ -1335,7 +1408,7 @@ class EnhancedDeepModelTrainer:
                 
                 # Use standard prediction as fallback
                 try:
-                    # Standard prediction without MC dropout
+                    # Standard prediction without MC dropout - with large batch size
                     model_preds = self._run_standard_prediction(model, X_scaled, batch_size)
                     
                     # Estimated uncertainty based on prediction strength
@@ -1357,18 +1430,26 @@ class EnhancedDeepModelTrainer:
             # Average predictions
             final_predictions = np.mean(all_model_predictions, axis=0)
             
-            # Combine uncertainties using root mean square
-            # (proper way to combine standard deviations)
-            final_uncertainties = np.sqrt(np.mean(np.square(all_model_uncertainties), axis=0))
-            
-            # Apply calibration to uncertainties based on prediction strength
-            # Predictions close to 0.5 should have higher uncertainty
-            prediction_certainty = 1.0 - 2.0 * np.abs(final_predictions - 0.5)
-            calibration_factor = 0.5 + 0.5 * prediction_certainty
-            calibrated_uncertainties = final_uncertainties * calibration_factor
-            
-            # Ensure uncertainties are in reasonable range
-            calibrated_uncertainties = np.clip(calibrated_uncertainties, 0.05, 0.5)
+            # Simplified uncertainty calculation for optimization mode
+            if hasattr(self, '_in_hybrid_optimization') and self._in_hybrid_optimization:
+                # Simple standard deviation estimate - faster
+                final_uncertainties = np.mean(all_model_uncertainties, axis=0)
+                # Simple clipping
+                calibrated_uncertainties = np.clip(final_uncertainties, 0.05, 0.5)
+            else:
+                # Full uncertainty calculation for normal mode
+                # Combine uncertainties using root mean square
+                # (proper way to combine standard deviations)
+                final_uncertainties = np.sqrt(np.mean(np.square(all_model_uncertainties), axis=0))
+                
+                # Apply calibration to uncertainties based on prediction strength
+                # Predictions close to 0.5 should have higher uncertainty
+                prediction_certainty = 1.0 - 2.0 * np.abs(final_predictions - 0.5)
+                calibration_factor = 0.5 + 0.5 * prediction_certainty
+                calibrated_uncertainties = final_uncertainties * calibration_factor
+                
+                # Ensure uncertainties are in reasonable range
+                calibrated_uncertainties = np.clip(calibrated_uncertainties, 0.05, 0.5)
             
             # Final NaN check
             if np.isnan(final_predictions).any() or np.isnan(calibrated_uncertainties).any():
@@ -1377,12 +1458,26 @@ class EnhancedDeepModelTrainer:
                 final_predictions = np.nan_to_num(final_predictions, nan=0.5)
                 calibrated_uncertainties = np.nan_to_num(calibrated_uncertainties, nan=0.2)
             
+            # Store in cache for repeated calls with the same data
+            self._uncertainty_cache[X_hash] = (final_predictions, calibrated_uncertainties)
+            
+            # Limit cache size to prevent memory issues
+            if len(self._uncertainty_cache) > 10:
+                # Remove oldest entries (first ones added)
+                keys_to_remove = list(self._uncertainty_cache.keys())[:-10]
+                for key in keys_to_remove:
+                    del self._uncertainty_cache[key]
+            
             return final_predictions, calibrated_uncertainties
         else:
             # Default if all models failed
             print("Warning: All uncertainty estimations failed, using defaults")
             mean_preds = np.full(len(X), 0.5)
             uncertainties = np.full(len(X), 0.2)
+            
+            # Cache default values too
+            self._uncertainty_cache[X_hash] = (mean_preds, uncertainties)
+            
             return mean_preds, uncertainties
             
     def _run_mc_dropout_samples(self, model, X_scaled: np.ndarray, mc_samples: int, batch_size: int) -> List[np.ndarray]:
