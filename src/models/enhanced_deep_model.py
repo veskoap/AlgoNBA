@@ -309,6 +309,16 @@ class EnhancedNBAPredictor(nn.Module):
         if len(self.hidden_dims) < 2:
             self.hidden_dims = [512, 256]
             
+        # Print model architecture sizing
+        print(f"Model architecture: {self.hidden_dims}")
+        print(f"Input size: {input_size}")
+        # Calculate approximate number of parameters
+        params = input_size * self.hidden_dims[0]  # Input layer
+        for i in range(len(self.hidden_dims) - 1):
+            params += self.hidden_dims[i] * self.hidden_dims[i+1]  # Hidden layers
+        params += self.hidden_dims[-1] * 2  # Output layer
+        print(f"Approximate parameter count: {params:,}")
+            
         # Stem layer - initial feature transformation with higher capacity
         self.stem = nn.Sequential(
             nn.Linear(input_size, self.hidden_dims[0]),
@@ -465,47 +475,35 @@ class EnhancedDeepModelTrainer:
         
         Args:
             use_residual: Whether to use residual connections in the neural network.
-                         Residual connections help with gradient flow in deeper networks
-                         and typically improve performance, especially for complex data.
             use_attention: Whether to use self-attention mechanism in the model.
-                          Attention allows the model to focus on important feature
-                          relationships and can improve prediction accuracy.
             use_mc_dropout: Whether to use Monte Carlo dropout for uncertainty estimation.
-                           When enabled, dropout remains active during inference, allowing
-                           multiple predictions to estimate uncertainty.
             use_bottleneck: Whether to use bottleneck architecture in residual blocks.
-                           Bottleneck design improves computational efficiency and model capacity.
             attention_heads: Number of attention heads in multi-head attention.
-                           More heads can capture different feature relationship patterns.
             learning_rate: Initial learning rate for the optimizer.
-                          Lower values (e.g., 0.0001-0.001) lead to more stable but slower learning.
             weight_decay: L2 regularization strength to prevent overfitting.
             epochs: Maximum number of training epochs.
-                   Higher values allow more thorough training but increase time.
-                   Early stopping will prevent unnecessary epochs.
             hidden_layers: List specifying the size of each hidden layer.
-                         If None, defaults to [512, 256, 128, 64].
-                         Example: [64, 32] creates a smaller network with two hidden layers.
             n_folds: Number of folds to use in time-series cross-validation.
-                    Higher values (e.g., 5) provide more robust evaluation but require
-                    more training time. For quick testing, use lower values like 2-3.
             scheduler_type: Type of learning rate scheduler to use.
-                          Options: "cosine", "plateau", "one_cycle", "exponential"
             early_stopping_patience: Number of epochs to wait for improvement before stopping.
-                                   Higher values allow more exploration but may waste compute.
             class_weight_adjustment: Whether to use class weights to handle imbalanced data.
-                                    Useful when one outcome (win/loss) is more frequent.
             batch_size: Size of mini-batches for training.
-                       Larger values can improve training speed but require more memory.
             gradient_clip: Maximum norm of gradients for clipping.
-                          Prevents exploding gradients during training.
             use_amp: Whether to use automatic mixed precision for faster training on GPUs.
-                    This uses FP16 (half precision) where appropriate to speed up training.
             prefetch_factor: Number of batches to prefetch in DataLoader.
-                           Higher values can improve GPU utilization.
             num_workers: Number of worker processes for data loading.
-                       More workers can improve data loading throughput.
         """
+        # Increase batch size for A100 GPU when available
+        if torch.cuda.is_available():
+            device_name = torch.cuda.get_device_name(0)
+            # Check if we have A100 and n_folds > 2 (not quick mode)
+            if "A100" in device_name and n_folds > 2:
+                original_batch = batch_size
+                batch_size = max(128, batch_size * 2)
+                print(f"A100 detected with full model: Increasing batch size from {original_batch} to {batch_size}")
+        
+        # Store modified batch size        
+        self.batch_size = batch_size
         self.models = []
         self.scalers = []
         self.training_features = []  # Store original feature names
@@ -720,7 +718,11 @@ class EnhancedDeepModelTrainer:
                 )
 
             # Initialize mixed precision training (if enabled)
-            scaler = GradScaler() if self.use_amp and torch.cuda.is_available() else None
+            if self.use_amp and torch.cuda.is_available():
+                # Use updated constructor to avoid deprecation warning
+                scaler = GradScaler(device_type='cuda')
+            else:
+                scaler = None
             
             # Log GPU memory before training
             if torch.cuda.is_available():
@@ -738,16 +740,32 @@ class EnhancedDeepModelTrainer:
                 # Force CUDA memory allocation at the beginning of each epoch if on GPU
                 if torch.cuda.is_available() and epoch == 0:
                     print("Forcing initial GPU memory allocation...")
-                    # Create a dummy batch and move it to GPU to ensure memory allocation
-                    dummy_input = torch.zeros(self.batch_size, X_train.shape[1], device=self.device)
+                    # Create a much larger dummy batch to ensure substantial GPU memory allocation
+                    # For A100, we can use a larger batch size
+                    large_batch_size = max(self.batch_size * 4, 128)
+                    print(f"Using large batch of {large_batch_size} for initialization")
+                    
+                    # Create a larger batch and move it to GPU
+                    dummy_input = torch.zeros(large_batch_size, X_train.shape[1], device=self.device)
                     dummy_out = model(dummy_input)
-                    del dummy_input, dummy_out
+                    
+                    # Create multiple batches to force memory usage
+                    for i in range(3):  # Use more batches for non-quick mode
+                        dummy_input2 = torch.randn(large_batch_size, X_train.shape[1], device=self.device)
+                        model(dummy_input2)
+                    
+                    # Clean up
+                    del dummy_input, dummy_out, dummy_input2
                     torch.cuda.empty_cache()
                     
                     # Log memory usage
                     allocated_mem = torch.cuda.memory_allocated(0) / 1024**3
                     reserved_mem = torch.cuda.memory_reserved(0) / 1024**3
                     print(f"Epoch start GPU memory: Allocated={allocated_mem:.2f}GB, Reserved={reserved_mem:.2f}GB")
+                    
+                    # Report model size on device
+                    model_size = sum(p.numel() * p.element_size() for p in model.parameters()) / 1024**3
+                    print(f"Model size on GPU: {model_size:.4f}GB")
                 
                 # ----- Training phase -----
                 model.train()
