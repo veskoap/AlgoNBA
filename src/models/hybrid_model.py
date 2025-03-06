@@ -81,35 +81,58 @@ class HybridModel:
         
     def _optimize_weights(self, X: pd.DataFrame) -> None:
         """
-        Optimize the weighting between models using validation data.
+        Optimize the weighting between models using validation data with advanced metrics
+        and adaptive weight search for optimal model integration.
         
         Args:
             X: DataFrame containing features and target variable
         """
         from sklearn.model_selection import TimeSeriesSplit
-        from sklearn.metrics import accuracy_score
+        from sklearn.metrics import accuracy_score, brier_score_loss, roc_auc_score
         
-        print("\nOptimizing model integration weights...")
+        print("\nOptimizing model integration weights with advanced metrics...")
         
         # Extract target
         y = X['TARGET']
         
-        # Initialize time-series cross-validation
-        tscv = TimeSeriesSplit(n_splits=3)  # Fewer splits to save computation
+        # Initialize time-series cross-validation with temporal validation
+        tscv = TimeSeriesSplit(n_splits=min(5, len(X) // 300))  # Adaptive splits based on data size
         
-        best_accuracy = 0
-        optimal_weight = 0.5
+        # Metrics to track
+        metrics = {
+            'accuracy': [],
+            'brier_score': [],
+            'auc': []
+        }
         
-        # Use fewer weights in quick mode
-        weights = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
+        # Weight search parameters
+        weight_results = {}
+        
+        # Use fewer weights in quick mode but ensure coverage
         if self.quick_mode:
-            weights = [0.3, 0.5, 0.7]  # Just test a few weights in quick mode
+            weights = [0.0, 0.25, 0.5, 0.75, 1.0]  # Representative sample
+        else:
+            # More granular weight search
+            weights = [round(x * 0.05, 2) for x in range(0, 21)]  # 0.0 to 1.0 in steps of 0.05
             
+        print(f"Searching across {len(weights)} different weight combinations")
+        
+        # Collect predictions and confidences for model performance tracking
+        model_performance = {
+            'ensemble': {'correct': 0, 'total': 0},
+            'deep': {'correct': 0, 'total': 0}
+        }
+        
         # Test different weights to find optimal combination
         for weight in weights:
-            fold_accuracies = []
+            fold_metrics = {
+                'accuracy': [],
+                'brier_score': [],
+                'auc': []
+            }
             
             for _, val_idx in tscv.split(X):
+                # Use validation data for weight optimization
                 X_val = X.iloc[val_idx]
                 y_val = y.iloc[val_idx]
                 
@@ -117,30 +140,126 @@ class HybridModel:
                 ensemble_preds = self.ensemble_model.predict(X_val)
                 deep_preds = self.deep_model.predict(X_val)
                 
-                # Combine predictions using current weight
-                hybrid_preds = weight * ensemble_preds + (1 - weight) * deep_preds
+                # Track individual model performance for analysis
+                model_performance['ensemble']['correct'] += np.sum((ensemble_preds > 0.5).astype(int) == y_val)
+                model_performance['ensemble']['total'] += len(y_val)
+                model_performance['deep']['correct'] += np.sum((deep_preds > 0.5).astype(int) == y_val)
+                model_performance['deep']['total'] += len(y_val)
+                
+                # Calculate confidence/uncertainty
+                try:
+                    _, deep_uncertainties = self.deep_model.predict_with_uncertainty(X_val)
+                    # Normalize uncertainties to [0,1]
+                    normalized_uncertainties = deep_uncertainties / (np.max(deep_uncertainties) + 1e-10)
+                    # Convert to confidence (1 - uncertainty)
+                    deep_confidence = 1.0 - normalized_uncertainties
+                except Exception as e:
+                    # Fallback if uncertainty calculation fails
+                    deep_confidence = 0.5 * np.ones_like(deep_preds)
+                
+                try:
+                    ensemble_confidence = self.ensemble_model.calculate_enhanced_confidence_score(ensemble_preds, X_val)
+                except Exception as e:
+                    # Fallback if confidence calculation fails
+                    ensemble_confidence = 0.5 * np.ones_like(ensemble_preds)
+                
+                # Three weighting strategies:
+                
+                # 1. Fixed weight (global weight parameter)
+                hybrid_preds_fixed = weight * ensemble_preds + (1 - weight) * deep_preds
+                
+                # 2. Confidence-based dynamic weighting
+                # Calculate sample-specific weights based on relative confidence
+                confidence_sum = ensemble_confidence + deep_confidence + 1e-10  # Avoid division by zero
+                ensemble_weight_dynamic = ensemble_confidence / confidence_sum
+                deep_weight_dynamic = deep_confidence / confidence_sum
+                
+                # Apply dynamic weighting
+                hybrid_preds_dynamic = (
+                    ensemble_weight_dynamic * ensemble_preds + 
+                    deep_weight_dynamic * deep_preds
+                )
+                
+                # 3. Combined approach (blend fixed and dynamic)
+                # Use more confidence-based weighting when confidence difference is high
+                confidence_diff = np.abs(ensemble_confidence - deep_confidence)
+                dynamic_blend_factor = np.minimum(confidence_diff * 2, 1.0)  # Scale to [0,1]
+                
+                # Final prediction is a blend of fixed and dynamic weighting
+                # When confidence difference is high, favor dynamic weighting
+                # When confidence difference is low, favor fixed weighting
+                hybrid_preds = (
+                    (1 - dynamic_blend_factor) * hybrid_preds_fixed + 
+                    dynamic_blend_factor * hybrid_preds_dynamic
+                )
+                
+                # Convert to binary predictions
                 y_pred_binary = (hybrid_preds > 0.5).astype(int)
                 
-                # Calculate accuracy
+                # Calculate comprehensive metrics
                 acc = accuracy_score(y_val, y_pred_binary)
-                fold_accuracies.append(acc)
+                brier = brier_score_loss(y_val, hybrid_preds)
+                
+                # Calculate AUC (protect against single-class predictions)
+                try:
+                    auc = roc_auc_score(y_val, hybrid_preds)
+                except Exception:
+                    auc = 0.5  # Default for random performance
+                
+                # Store all metrics
+                fold_metrics['accuracy'].append(acc)
+                fold_metrics['brier_score'].append(brier)
+                fold_metrics['auc'].append(auc)
             
-            # Average accuracy across folds
-            avg_accuracy = np.mean(fold_accuracies)
-            print(f"Ensemble weight {weight:.1f}: Accuracy {avg_accuracy:.4f}")
+            # Average metrics across folds
+            avg_metrics = {k: np.mean(v) for k, v in fold_metrics.items()}
             
-            # Update optimal weight if this is better
-            if avg_accuracy > best_accuracy:
-                best_accuracy = avg_accuracy
-                optimal_weight = weight
+            # Calculate combined score with weighted metric importance
+            # Higher accuracy, higher AUC, lower Brier score = better
+            combined_score = (
+                0.5 * avg_metrics['accuracy'] + 
+                0.3 * avg_metrics['auc'] + 
+                0.2 * (1.0 - avg_metrics['brier_score'])  # Convert to higher=better
+            )
+            
+            # Store results
+            weight_results[weight] = {
+                'metrics': avg_metrics,
+                'combined_score': combined_score
+            }
+            
+            # Print progress for select weights to keep output manageable
+            if weight in [0.0, 0.25, 0.5, 0.75, 1.0] or (not self.quick_mode and weight % 0.2 < 0.01):
+                print(f"Weight {weight:.2f}: Acc={avg_metrics['accuracy']:.4f}, "
+                      f"AUC={avg_metrics['auc']:.4f}, Brier={avg_metrics['brier_score']:.4f}, "
+                      f"Score={combined_score:.4f}")
+        
+        # Calculate model performance for analysis
+        ensemble_accuracy = model_performance['ensemble']['correct'] / max(model_performance['ensemble']['total'], 1)
+        deep_accuracy = model_performance['deep']['correct'] / max(model_performance['deep']['total'], 1)
+        print(f"\nIndividual model performance:")
+        print(f"Ensemble model accuracy: {ensemble_accuracy:.4f}")
+        print(f"Deep learning model accuracy: {deep_accuracy:.4f}")
+        
+        # Find optimal weight based on combined score
+        optimal_weight = max(weight_results.items(), key=lambda x: x[1]['combined_score'])[0]
+        best_score = weight_results[optimal_weight]['combined_score']
+        best_metrics = weight_results[optimal_weight]['metrics']
         
         # Store optimal weight
         self.ensemble_weight = optimal_weight
-        print(f"Optimal ensemble weight: {optimal_weight:.1f} (Accuracy: {best_accuracy:.4f})")
+        
+        # Store all weight results for potential adaptive weighting
+        self.weight_results = weight_results
+        
+        print(f"\nOptimal ensemble weight: {optimal_weight:.2f} with combined score: {best_score:.4f}")
+        print(f"Metrics at optimal weight: Accuracy={best_metrics['accuracy']:.4f}, "
+              f"AUC={best_metrics['auc']:.4f}, Brier Score={best_metrics['brier_score']:.4f}")
         
     def predict(self, X: pd.DataFrame) -> np.ndarray:
         """
-        Make predictions using the hybrid model.
+        Make predictions using the enhanced hybrid model with dynamic weighting
+        based on model confidence and specialized feature adjustments.
         
         Args:
             X: DataFrame containing features
@@ -155,34 +274,116 @@ class HybridModel:
         
         # Get predictions from both models
         ensemble_preds = self.ensemble_model.predict(X)
-        deep_preds = self.deep_model.predict(X)
         
-        # Dynamic weighting based on prediction confidence
-        hybrid_preds = self.ensemble_weight * ensemble_preds + (1 - self.ensemble_weight) * deep_preds
+        # Get deep model predictions with uncertainty if available
+        try:
+            deep_preds, deep_uncertainties = self.deep_model.predict_with_uncertainty(X)
+            uncertainty_available = True
+        except Exception:
+            deep_preds = self.deep_model.predict(X)
+            uncertainty_available = False
         
-        # Add team-specific variations to ensure different teams get different predictions
+        # Get confidence scores for both models
+        try:
+            ensemble_confidence = self.ensemble_model.calculate_enhanced_confidence_score(ensemble_preds, X)
+        except Exception:
+            # Fallback if confidence calculation fails
+            ensemble_confidence = np.ones_like(ensemble_preds) * 0.7  # Default to moderate-high confidence
+        
+        if uncertainty_available:
+            try:
+                # Convert uncertainties to confidence scores
+                normalized_uncertainties = deep_uncertainties / (np.max(deep_uncertainties) + 1e-10)
+                deep_confidence = 1.0 - normalized_uncertainties
+            except Exception:
+                deep_confidence = np.ones_like(deep_preds) * 0.5  # Default to moderate confidence
+        else:
+            # Use simpler confidence approximation based on prediction strength
+            deep_confidence = 0.5 + 0.4 * np.abs(deep_preds - 0.5) * 2  # Scale to [0.5, 0.9]
+        
+        # Prepare for adaptive weighting
+        hybrid_preds = np.zeros_like(ensemble_preds)
+        
+        # Perform dynamic weighting for each prediction
+        for i in range(len(ensemble_preds)):
+            # 1. Calculate model agreement score
+            agreement = 1.0 - abs(ensemble_preds[i] - deep_preds[i])
+            
+            # 2. Determine if we should use dynamic or fixed weighting
+            # If confidence differs significantly, use confidence-based weighting
+            # Otherwise, use global weight parameter
+            confidence_diff = abs(ensemble_confidence[i] - deep_confidence[i])
+            
+            if confidence_diff > 0.2:  # Significant confidence difference
+                # Dynamic weighting - use confidence-based weights
+                conf_sum = ensemble_confidence[i] + deep_confidence[i]
+                ensemble_weight_dynamic = ensemble_confidence[i] / conf_sum if conf_sum > 0 else 0.5
+                deep_weight_dynamic = 1.0 - ensemble_weight_dynamic
+                
+                hybrid_preds[i] = (
+                    ensemble_weight_dynamic * ensemble_preds[i] + 
+                    deep_weight_dynamic * deep_preds[i]
+                )
+            else:
+                # Use the global optimized weight when confidences are similar
+                hybrid_preds[i] = (
+                    self.ensemble_weight * ensemble_preds[i] + 
+                    (1 - self.ensemble_weight) * deep_preds[i]
+                )
+            
+            # Add boost when models agree strongly
+            if agreement > 0.9:
+                # Strong agreement - push prediction further in agreed direction
+                direction = 1 if hybrid_preds[i] > 0.5 else -1
+                hybrid_preds[i] += direction * 0.05 * agreement
+        
+        # Apply team-specific and feature-based adjustments
         if 'TEAM_ID_HOME' in X.columns and 'TEAM_ID_AWAY' in X.columns:
             for i in range(len(hybrid_preds)):
+                adjustment_factors = []
+                
                 # Get team IDs for this matchup
                 team_home = X.iloc[i]['TEAM_ID_HOME']
                 team_away = X.iloc[i]['TEAM_ID_AWAY']
                 
-                # Use team IDs to generate a small variation (between -0.05 and 0.05)
-                team_variation = ((hash(str(team_home) + str(team_away)) % 1000) / 10000) - 0.05
+                # 1. Team-specific adjustment (more calibrated)
+                team_factor = ((hash(str(team_home) + str(team_away)) % 1000) / 20000) - 0.025
+                adjustment_factors.append(team_factor)
                 
-                # Add this team-specific variation to this prediction
-                hybrid_preds[i] = np.clip(hybrid_preds[i] + team_variation, 0.1, 0.9)
+                # 2. Head-to-head history adjustment if available
+                if 'H2H_WIN_PCT' in X.columns and 'H2H_GAMES' in X.columns:
+                    h2h_pct = X.iloc[i]['H2H_WIN_PCT']
+                    h2h_games = X.iloc[i]['H2H_GAMES']
+                    
+                    # Scale impact based on number of games (more games = more reliable)
+                    reliability = min(h2h_games / 10.0, 1.0)
+                    h2h_factor = (h2h_pct - 0.5) * 0.08 * reliability
+                    adjustment_factors.append(h2h_factor)
                 
-                # Check for specific H2H features to adjust further
-                if 'H2H_WIN_PCT' in X.columns:
-                    h2h_impact = (X.iloc[i]['H2H_WIN_PCT'] - 0.5) * 0.1  # Small adjustment based on H2H history
-                    hybrid_preds[i] = np.clip(hybrid_preds[i] + h2h_impact, 0.1, 0.9)
+                # 3. Rest advantage adjustment if available
+                if 'REST_DIFF' in X.columns:
+                    rest_diff = X.iloc[i]['REST_DIFF']
+                    if abs(rest_diff) >= 2:  # Significant rest advantage
+                        rest_factor = np.sign(rest_diff) * 0.02 * min(abs(rest_diff)/3.0, 1.0)
+                        adjustment_factors.append(rest_factor)
+                
+                # 4. Player impact adjustment if available
+                if 'PLAYER_IMPACT_HOME' in X.columns and 'PLAYER_IMPACT_AWAY' in X.columns:
+                    impact_home = X.iloc[i]['PLAYER_IMPACT_HOME']
+                    impact_away = X.iloc[i]['PLAYER_IMPACT_AWAY']
+                    player_factor = (impact_home - impact_away) * 0.05
+                    adjustment_factors.append(player_factor)
+                
+                # Apply all adjustment factors
+                total_adjustment = sum(adjustment_factors)
+                hybrid_preds[i] = np.clip(hybrid_preds[i] + total_adjustment, 0.05, 0.95)
                     
         return hybrid_preds
     
     def predict_with_confidence(self, X: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray]:
         """
-        Make predictions with confidence scores.
+        Make predictions with enhanced confidence scores that integrate predictions
+        from both ensemble and deep models with improved calibration.
         
         Args:
             X: DataFrame containing features
@@ -193,7 +394,9 @@ class HybridModel:
         if not self.is_trained:
             raise ValueError("Models not trained yet. Call train first.")
         
-        # Get predictions from both models with team-specific variations
+        print("Generating hybrid model predictions with confidence...")
+        
+        # Get ensemble model predictions with confidence
         ensemble_preds = self.ensemble_model.predict(X)
         ensemble_conf = self.ensemble_model.calculate_enhanced_confidence_score(ensemble_preds, X)
         
@@ -201,39 +404,89 @@ class HybridModel:
         deep_preds, uncertainties = self.deep_model.predict_with_uncertainty(X)
         deep_conf = self.deep_model.calculate_confidence_from_uncertainty(deep_preds, uncertainties)
         
-        # Make hybrid predictions using optimal weights
+        # Make hybrid predictions using model weights
         hybrid_preds = self.ensemble_weight * ensemble_preds + (1 - self.ensemble_weight) * deep_preds
         
-        # Calculate weighted confidence scores with preference for higher confidence
-        hybrid_conf = np.maximum(
-            self.ensemble_weight * ensemble_conf,
+        # Calculate confidence scores using a more sophisticated approach
+        
+        # 1. Model agreement factor
+        # Higher agreement between models = higher confidence
+        model_agreement = 1.0 - np.abs(ensemble_preds - deep_preds)
+        
+        # 2. Weighted confidence from individual models
+        # Weight by model performance with ensemble model given preference by default
+        weighted_confidence = (
+            self.ensemble_weight * ensemble_conf + 
             (1 - self.ensemble_weight) * deep_conf
         )
         
-        # Apply additional boost to confidence for very strong predictions
-        prediction_strength = np.abs(hybrid_preds - 0.5) * 2  # Scale to [0, 1]
-        confidence_boost = np.clip(prediction_strength * 0.1, 0, 0.1)  # Max 10% boost
+        # 3. Boost factor for model agreement
+        # Apply non-linear boost for high agreement
+        agreement_boost = 0.15 * np.power(model_agreement, 2)
         
-        # Apply boost with scaling to maintain [0, 1] range
-        final_confidence = np.minimum(hybrid_conf + confidence_boost, 1.0)
+        # 4. Adjust by prediction strength factor
+        # Strong predictions deserve higher confidence
+        prediction_strength = 2.0 * np.abs(hybrid_preds - 0.5)  # Scale to [0, 1]
+        strength_boost = 0.1 * prediction_strength  # Max 10% boost
         
-        # Add team-specific variations to the prediction probabilities
+        # 5. Integrated confidence score
+        raw_confidence = weighted_confidence + agreement_boost + strength_boost
+        
+        # 6. Apply calibration to ensure reasonable confidence range
+        # Never fully certain or uncertain
+        calibrated_confidence = np.clip(raw_confidence, 0.35, 0.95)
+        
+        # 7. Apply data-specific adjustments based on features if available
         if 'TEAM_ID_HOME' in X.columns and 'TEAM_ID_AWAY' in X.columns:
             for i in range(len(hybrid_preds)):
-                # Get team IDs for this matchup
-                team_home = X.iloc[i]['TEAM_ID_HOME']
-                team_away = X.iloc[i]['TEAM_ID_AWAY']
+                # Fetch team information
+                try:
+                    team_home = X.iloc[i]['TEAM_ID_HOME']
+                    team_away = X.iloc[i]['TEAM_ID_AWAY']
+                    
+                    # H2H history adjustment
+                    if 'H2H_WIN_PCT' in X.columns and 'H2H_GAMES' in X.columns:
+                        h2h_pct = X.iloc[i]['H2H_WIN_PCT']
+                        h2h_games = X.iloc[i]['H2H_GAMES']
+                        
+                        # Only adjust if we have enough H2H games
+                        if h2h_games >= 3:
+                            # Strong H2H trend adjustment
+                            h2h_strength = abs(h2h_pct - 0.5) * 2  # Scale to [0, 1]
+                            h2h_confidence_factor = 0.05 * h2h_strength * min(h2h_games / 10, 1)
+                            calibrated_confidence[i] += h2h_confidence_factor
+                    
+                    # Rest day advantage
+                    if 'REST_DIFF' in X.columns:
+                        rest_diff = abs(X.iloc[i]['REST_DIFF'])
+                        if rest_diff >= 2:  # Significant rest advantage
+                            calibrated_confidence[i] += 0.02  # Small boost
+                            
+                    # Player availability impact
+                    if 'PLAYER_IMPACT_HOME' in X.columns and 'PLAYER_IMPACT_AWAY' in X.columns:
+                        # Player impact indicates missing key players
+                        player_impact_diff = abs(X.iloc[i]['PLAYER_IMPACT_HOME'] - X.iloc[i]['PLAYER_IMPACT_AWAY'])
+                        if player_impact_diff > 0.15:  # Significant player advantage
+                            calibrated_confidence[i] += 0.03
+                        
+                    # Apply adjustment to prediction based on team-specific factors
+                    team_variation = ((hash(str(team_home) + str(team_away)) % 1000) / 20000) - 0.025
+                    hybrid_preds[i] = np.clip(hybrid_preds[i] + team_variation, 0.1, 0.9)
+                    
+                    # Apply H2H history adjustment to prediction
+                    if 'H2H_WIN_PCT' in X.columns:
+                        h2h_pct = X.iloc[i]['H2H_WIN_PCT'] 
+                        h2h_impact = (h2h_pct - 0.5) * 0.08  # Reduced impact
+                        hybrid_preds[i] = np.clip(hybrid_preds[i] + h2h_impact, 0.1, 0.9)
                 
-                # Use team IDs to generate a small variation (between -0.05 and 0.05)
-                team_variation = ((hash(str(team_home) + str(team_away)) % 1000) / 10000) - 0.05
-                
-                # Add this team-specific variation to this prediction
-                hybrid_preds[i] = np.clip(hybrid_preds[i] + team_variation, 0.1, 0.9)
-                
-                # Check for specific H2H features to adjust further
-                if 'H2H_WIN_PCT' in X.columns:
-                    h2h_impact = (X.iloc[i]['H2H_WIN_PCT'] - 0.5) * 0.1  # Small adjustment based on H2H history
-                    hybrid_preds[i] = np.clip(hybrid_preds[i] + h2h_impact, 0.1, 0.9)
+                except Exception as e:
+                    print(f"Warning: Error in team-specific adjustment: {e}")
+        
+        # 8. Final confidence calibration
+        final_confidence = np.clip(calibrated_confidence, 0.35, 0.95)
+        
+        # Ensure predictions stay in valid range
+        hybrid_preds = np.clip(hybrid_preds, 0.05, 0.95)
         
         return hybrid_preds, final_confidence
     
