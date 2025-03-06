@@ -167,29 +167,60 @@ class NBADataLoader:
                 # Get player stats for the entire league
                 print("Fetching league-wide player stats...")
                 try:
+                    # Fetch basic player stats with proper parameter names
                     league_stats = leaguedashplayerstats.LeagueDashPlayerStats(
                         season=season,
-                        season_type_all_star='Regular Season',
-                        measure_type_detailed_defense='Advanced',
-                        per_mode_detailed='PerGame'
+                        season_type_nullable='Regular Season',
+                        per_mode_nullable='PerGame'
                     ).get_data_frames()[0]
                     
-                    # Map player positions
+                    print(f"Successfully retrieved {len(league_stats)} player stats")
+                    
+                    # Debug available columns
+                    if not league_stats.empty:
+                        print(f"Available columns: {league_stats.columns.tolist()}")
+                    
+                    # Assign positions based on player roles - position is typically missing
+                    # Use a simplified approach for position assignment
                     for _, player in league_stats.iterrows():
-                        player_position_map[player['PLAYER_ID']] = player['POSITION']
+                        player_id = player['PLAYER_ID']
+                        
+                        # Infer position from height/weight or stats
+                        # Guards tend to have higher AST, forwards rebounds, centers blocks
+                        position = 'F'  # Default to forward
+                        
+                        if 'PLAYER_POSITION' in league_stats.columns:
+                            position = player['PLAYER_POSITION']
+                        else:
+                            # Attempt to infer position by stats
+                            ast_per_min = player['AST'] / max(player['MIN'], 1)
+                            reb_per_min = player['REB'] / max(player['MIN'], 1)
+                            blk_per_min = player.get('BLK', 0) / max(player['MIN'], 1)
+                            
+                            if ast_per_min > 0.15:  # Higher assists -> guard
+                                position = 'G'
+                            elif blk_per_min > 0.08:  # Higher blocks -> center
+                                position = 'C'
+                            elif reb_per_min > 0.2:  # Higher rebounds -> forward/center
+                                position = 'F'
+                        
+                        player_position_map[player_id] = position
                         
                     # Store player statistics by ID for later reference
                     for _, player in league_stats.iterrows():
-                        player_stats_by_id[player['PLAYER_ID']] = {
+                        player_id = player['PLAYER_ID']
+                        position = player_position_map.get(player_id, 'F')
+                        
+                        player_stats_by_id[player_id] = {
                             'NAME': player['PLAYER_NAME'],
-                            'TEAM': player['TEAM_ID'],
-                            'POSITION': player['POSITION'],
-                            'MIN': player['MIN'],
-                            'PTS': player['PTS'],
-                            'AST': player['AST'],
-                            'REB': player['REB'],
-                            'STL': player['STL'],
-                            'BLK': player['BLK'],
+                            'TEAM': player.get('TEAM_ID', 0),
+                            'POSITION': position,
+                            'MIN': player.get('MIN', 0),
+                            'PTS': player.get('PTS', 0),
+                            'AST': player.get('AST', 0),
+                            'REB': player.get('REB', 0),
+                            'STL': player.get('STL', 0),
+                            'BLK': player.get('BLK', 0),
                             'PIE': player.get('PIE', 0),
                             'PLUS_MINUS': player.get('PLUS_MINUS', 0),
                             'USG_PCT': player.get('USG_PCT', 0)
@@ -199,17 +230,24 @@ class NBADataLoader:
                 except Exception as e:
                     print(f"Error fetching league-wide stats: {e}")
                 
-                # Get teams for the season
-                teams = self.fetch_teams(season)
-                
-                print(f"Calculating player impact metrics for {len(teams['TEAM_ID'].unique())} teams...")
-                for team_id in teams['TEAM_ID'].unique():
+                # Get teams for the season with corrected parameter format
+                try:
+                    teams = self.fetch_teams(season)
+                    unique_teams = teams['TEAM_ID'].unique() if not teams.empty else []
+                    print(f"Calculating player impact metrics for {len(unique_teams)} teams...")
+                except Exception as e:
+                    print(f"Error getting teams: {e}")
+                    # Create an empty dataframe with the expected structure
+                    teams = pd.DataFrame({'TEAM_ID': [], 'TEAM_NAME': []})
+                    unique_teams = []
+                    print("Using fallback team data (empty)")
+                for team_id in unique_teams:
                     try:
-                        # Fetch team player dashboard
+                        # Fetch team player dashboard with corrected parameter names
                         team_players = teamplayerdashboard.TeamPlayerDashboard(
                             team_id=team_id,
                             season=season,
-                            season_type_all_star='Regular Season'
+                            season_type_nullable='Regular Season'
                         ).get_data_frames()[1]  # [1] contains individual player data
                         
                         # Calculate player impact scores based on stats
@@ -230,13 +268,31 @@ class NBADataLoader:
                                 lambda x: player_position_map.get(x, 'Unknown')
                             )
                             
+                            # Handle case where POSITION column doesn't exist
+                            if 'POSITION' not in team_players.columns:
+                                # Add POSITION based on player_position_map
+                                team_players['POSITION'] = team_players['PLAYER_ID'].map(
+                                    lambda x: player_position_map.get(x, 'F')
+                                )
+                                print(f"Added position data for {len(team_players)} players")
+                                
                             # Store detailed player stats including position
-                            player_impact[team_id] = team_players[['PLAYER_ID', 'PLAYER_NAME', 'POSITION', 'IMPACT_SCORE']]
+                            columns_to_select = ['PLAYER_ID', 'PLAYER_NAME', 'IMPACT_SCORE']
+                            if 'POSITION' in team_players.columns:
+                                columns_to_select.append('POSITION')
+                                
+                            player_data = team_players[columns_to_select].copy()
+                            if 'POSITION' not in player_data.columns:
+                                player_data['POSITION'] = player_data['PLAYER_ID'].map(
+                                    lambda x: player_position_map.get(x, 'F')
+                                )
+                                
+                            player_impact[team_id] = player_data
                             
                             # Calculate positional strength scores
-                            guards = team_players[team_players['POSITION'].isin(['G', 'PG', 'SG'])]
-                            forwards = team_players[team_players['POSITION'].isin(['F', 'SF', 'PF'])]
-                            centers = team_players[team_players['POSITION'].isin(['C'])]
+                            guards = player_data[player_data['POSITION'].isin(['G', 'PG', 'SG'])]
+                            forwards = player_data[player_data['POSITION'].isin(['F', 'SF', 'PF'])]
+                            centers = player_data[player_data['POSITION'].isin(['C'])]
                             
                             # Store positional impact scores
                             team_lineup_strength[team_id] = {
@@ -305,10 +361,19 @@ class NBADataLoader:
                             # Fallback if we can't determine home/away
                             home_team, away_team = game_teams
                         
-                        # Get box score for detailed player stats
-                        box_score = boxscoreadvancedv2.BoxScoreAdvancedV2(
-                            game_id=game_id
-                        ).get_data_frames()[0]
+                        # Get box score for detailed player stats with added error handling
+                        try:
+                            box_score = boxscoreadvancedv2.BoxScoreAdvancedV2(
+                                game_id=game_id
+                            ).get_data_frames()[0]
+                        except Exception as e:
+                            print(f"Error getting box score for game {game_id}: {e}")
+                            # Create a minimal box score with the required columns
+                            box_score = pd.DataFrame({
+                                'TEAM_ID': list(game_teams) * 5,  # Assume 5 players per team
+                                'PLAYER_ID': range(10),  # Dummy player IDs
+                                'START_POSITION': [''] * 10,  # No starters
+                            })
                         
                         # Process home team
                         home_players = box_score[box_score['TEAM_ID'] == home_team]
@@ -507,17 +572,46 @@ class NBADataLoader:
             from nba_api.stats.endpoints import commonteamyears, teaminfocommon
             
             # Get teams for the specified season
-            teams = commonteamyears.CommonTeamYears().get_data_frames()[0]
-            season_teams = teams[teams['SEASON_ID'] == f"2{season.split('-')[0]}"]
+            # Get teams data with proper season ID format
+            teams_data = commonteamyears.CommonTeamYears().get_data_frames()[0]
+            
+            # Debug available seasons
+            available_seasons = teams_data['SEASON_ID'].unique()
+            print(f"Available seasons in API: {available_seasons[:5]}...")
+            
+            # Convert from '2022-23' format to expected format like '22022' or '22023'
+            # Different NBA API endpoints use different formats
+            season_year = season.split('-')[0]
+            possible_formats = [
+                f"{season_year}-{str(int(season_year)+1)[-2:]}",  # 2022-23
+                f"2{season_year}",                                # 22022
+                f"2{str(int(season_year)+1)}",                    # 22023
+                season                                            # Original format
+            ]
+            
+            # Try each format until we find a match
+            season_teams = pd.DataFrame()
+            for format in possible_formats:
+                temp = teams_data[teams_data['SEASON_ID'] == format]
+                if not temp.empty:
+                    print(f"Found matching season format: {format}")
+                    season_teams = temp
+                    break
+                    
+            # If no match, use all teams as fallback
+            if season_teams.empty:
+                print(f"No exact season match found, using all teams as fallback")
+                season_teams = teams_data
             
             team_details = []
             
             # Get detailed info for each team
             for team_id in season_teams['TEAM_ID'].unique():
                 try:
+                    # Get team info with correct parameter name
                     team_info = teaminfocommon.TeamInfoCommon(
                         team_id=team_id,
-                        season=season
+                        season_nullable=season
                     ).get_data_frames()[0]
                     
                     if not team_info.empty:
