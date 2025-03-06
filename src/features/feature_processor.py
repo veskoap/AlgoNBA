@@ -382,7 +382,21 @@ class NBAFeatureProcessor:
 
         # Initialize features DataFrame and ensure proper sorting
         features = pd.DataFrame()
-        features['GAME_DATE'] = pd.to_datetime(games['GAME_DATE_HOME'])
+        
+        # Handle different column naming conventions with complete fallback strategy
+        if 'GAME_DATE_HOME' in games.columns:
+            features['GAME_DATE'] = pd.to_datetime(games['GAME_DATE_HOME'])
+        elif 'GAME_DATE' in games.columns:
+            features['GAME_DATE'] = pd.to_datetime(games['GAME_DATE'])
+        else:
+            # Try to find any date column
+            date_cols = [col for col in games.columns if 'DATE' in col]
+            if date_cols:
+                print(f"Using alternative date column: {date_cols[0]}")
+                features['GAME_DATE'] = pd.to_datetime(games[date_cols[0]])
+            else:
+                raise ValueError("No date column found in input DataFrame. Available columns: " + ", ".join(games.columns[:10]))
+            
         features['TEAM_ID_HOME'] = games['TEAM_ID_HOME']
         features['TEAM_ID_AWAY'] = games['TEAM_ID_AWAY']
         features['TARGET'] = (games['WL_HOME'] == 'W').astype(int)
@@ -391,8 +405,27 @@ class NBAFeatureProcessor:
         features['GAME_ID_HOME'] = games['GAME_ID_HOME']
         
         # Add contextual features
-        # Weekend game flag
-        features['WEEKEND_GAME'] = (pd.to_datetime(games['GAME_DATE_HOME']).dt.dayofweek >= 5).astype(int)
+        # Weekend game flag - determine the date column with complete fallback strategy
+        if 'GAME_DATE_HOME' in games.columns:
+            game_date_col = 'GAME_DATE_HOME'
+        elif 'GAME_DATE' in games.columns:
+            game_date_col = 'GAME_DATE'
+        else:
+            # Try to find any date column
+            date_cols = [col for col in games.columns if 'DATE' in col]
+            if date_cols:
+                game_date_col = date_cols[0]
+                print(f"Using alternative date column for weekend calculation: {game_date_col}")
+            else:
+                # Fallback to the date we already determined for features
+                game_date_col = None
+                
+        # Calculate weekend flag
+        if game_date_col:
+            features['WEEKEND_GAME'] = (pd.to_datetime(games[game_date_col]).dt.dayofweek >= 5).astype(int)
+        else:
+            # Use the GAME_DATE we already set in features
+            features['WEEKEND_GAME'] = (features['GAME_DATE'].dt.dayofweek >= 5).astype(int)
         
         # Add nationally televised game flag (placeholder - would need actual TV schedule data)
         features['NATIONAL_TV'] = 0
@@ -610,7 +643,21 @@ class NBAFeatureProcessor:
         # Get player availability and injury features
         try:
             # Get seasons from games dataframe
-            seasons = pd.to_datetime(games['GAME_DATE_HOME']).dt.year.unique()
+            # Determine the date column to use with complete fallback strategy
+            if 'GAME_DATE_HOME' in games.columns:
+                game_date_col = 'GAME_DATE_HOME'
+            elif 'GAME_DATE' in games.columns:
+                game_date_col = 'GAME_DATE'
+            else:
+                # Try to find any date column
+                date_cols = [col for col in games.columns if 'DATE' in col]
+                if date_cols:
+                    game_date_col = date_cols[0]
+                    print(f"Using alternative date column for season detection: {game_date_col}")
+                else:
+                    raise ValueError("No date column found for season detection. Available columns: " + ", ".join(games.columns[:10]))
+                
+            seasons = pd.to_datetime(games[game_date_col]).dt.year.unique()
             formatted_seasons = [f"{year}-{str(year+1)[-2:]}" for year in seasons]
             
             print(f"Getting player availability for season(s): {formatted_seasons}")
@@ -761,11 +808,27 @@ class NBAFeatureProcessor:
 
         # Convert to datetime
         games = games.copy()
-        games['GAME_DATE_HOME'] = pd.to_datetime(games['GAME_DATE_HOME'])
+        
+        # Handle different column naming for the game date with complete fallback strategy
+        if 'GAME_DATE_HOME' in games.columns:
+            game_date_col = 'GAME_DATE_HOME'
+        elif 'GAME_DATE' in games.columns:
+            game_date_col = 'GAME_DATE'
+        else:
+            # Try to find any date column
+            date_cols = [col for col in games.columns if 'DATE' in col]
+            if date_cols:
+                game_date_col = date_cols[0]
+                print(f"Using alternative date column for h2h features: {game_date_col}")
+            else:
+                # More detailed error message to help debugging
+                raise ValueError("No date column found for h2h features. Available columns: " + ", ".join(games.columns[:10]))
+            
+        games[game_date_col] = pd.to_datetime(games[game_date_col])
 
         # Create forward matches dataframe
         forward_matches = pd.DataFrame({
-            'date': games['GAME_DATE_HOME'],
+            'date': games[game_date_col],
             'team1': games['TEAM_ID_HOME'],
             'team2': games['TEAM_ID_AWAY'],
             'win': games['WL_HOME'] == 'W'
@@ -773,7 +836,7 @@ class NBAFeatureProcessor:
 
         # Create reverse matches dataframe
         reverse_matches = pd.DataFrame({
-            'date': games['GAME_DATE_HOME'],
+            'date': games[game_date_col],
             'team1': games['TEAM_ID_AWAY'],
             'team2': games['TEAM_ID_HOME'],
             'win': games['WL_HOME'] != 'W'
@@ -785,7 +848,7 @@ class NBAFeatureProcessor:
 
         # Initialize results DataFrame
         results = pd.DataFrame({
-            'GAME_DATE': games['GAME_DATE_HOME'],
+            'GAME_DATE': games[game_date_col],
             'TEAM_ID_HOME': games['TEAM_ID_HOME'],
             'TEAM_ID_AWAY': games['TEAM_ID_AWAY'],
             'H2H_GAMES': 0,
@@ -796,7 +859,7 @@ class NBAFeatureProcessor:
 
         # Process each game
         for idx in range(len(games)):
-            current_date = games.iloc[idx]['GAME_DATE_HOME']
+            current_date = games.iloc[idx][game_date_col]
             home_team = games.iloc[idx]['TEAM_ID_HOME']
             away_team = games.iloc[idx]['TEAM_ID_AWAY']
 
@@ -849,10 +912,25 @@ class NBAFeatureProcessor:
         # Calculate basic H2H stats
         h2h_stats = defaultdict(lambda: defaultdict(list))
 
+        # Determine the date column to use with complete fallback strategy
+        if 'GAME_DATE_HOME' in games.columns:
+            game_date_col = 'GAME_DATE_HOME'
+        elif 'GAME_DATE' in games.columns:
+            game_date_col = 'GAME_DATE'
+        else:
+            # Try to find any date column
+            date_cols = [col for col in games.columns if 'DATE' in col]
+            if date_cols:
+                game_date_col = date_cols[0]
+                print(f"Using alternative date column for enhanced h2h features: {game_date_col}")
+            else:
+                # More detailed error message to help debugging
+                raise ValueError("No date column found for enhanced h2h features. Available columns: " + ", ".join(games.columns[:10]))
+            
         for _, game in games.iterrows():
             home_team = game['TEAM_ID_HOME']
             away_team = game['TEAM_ID_AWAY']
-            game_date = pd.to_datetime(game['GAME_DATE_HOME'])
+            game_date = pd.to_datetime(game[game_date_col])
 
             # Store game result
             h2h_stats[(home_team, away_team)]['dates'].append(game_date)
@@ -875,8 +953,9 @@ class NBAFeatureProcessor:
                 )
                 
             # Track weekend performance in matchups
-            if 'GAME_DATE_HOME' in game:
-                game_day = pd.to_datetime(game['GAME_DATE_HOME']).dayofweek
+            # Use the same game_date_col variable as defined above
+            if game_date_col in game:
+                game_day = pd.to_datetime(game[game_date_col]).dayofweek
                 is_weekend = 1 if game_day >= 5 else 0  # 5=Saturday, 6=Sunday
                 h2h_stats[(home_team, away_team)]['weekend_games'].append(is_weekend)
                 h2h_stats[(home_team, away_team)]['weekend_wins'].append(
@@ -889,7 +968,7 @@ class NBAFeatureProcessor:
         for _, game in games.iterrows():
             home_team = game['TEAM_ID_HOME']
             away_team = game['TEAM_ID_AWAY']
-            game_date = pd.to_datetime(game['GAME_DATE_HOME'])
+            game_date = pd.to_datetime(game[game_date_col])
 
             # Get previous matchups
             prev_dates = [d for d in h2h_stats[(home_team, away_team)]['dates']
@@ -1014,9 +1093,23 @@ class NBAFeatureProcessor:
         seasonal_trends = pd.DataFrame()
 
         try:
+            # Determine the date column to use
+            if 'GAME_DATE_HOME' in games.columns:
+                game_date_col = 'GAME_DATE_HOME'
+            elif 'GAME_DATE' in games.columns:
+                game_date_col = 'GAME_DATE'
+            else:
+                # Try to find any date column
+                date_cols = [col for col in games.columns if 'DATE' in col]
+                if date_cols:
+                    game_date_col = date_cols[0]
+                    print(f"Using alternative date column: {game_date_col}")
+                else:
+                    raise ValueError("No game date column found. Available columns: " + ", ".join(games.columns[:10]))
+                
             # Convert game dates to day of season
-            season_start = games['GAME_DATE_HOME'].min()
-            games['DAYS_INTO_SEASON'] = (games['GAME_DATE_HOME'] - season_start).dt.days
+            season_start = games[game_date_col].min()
+            games['DAYS_INTO_SEASON'] = (games[game_date_col] - season_start).dt.days
 
             # Calculate rolling averages with seasonal weights for each window
             for window in DEFAULT_LOOKBACK_WINDOWS:
@@ -1197,9 +1290,20 @@ class NBAFeatureProcessor:
         
         try:
             # Make sure stats_df has required date column
-            if 'GAME_DATE_HOME' in stats_df.columns and 'GAME_DATE' not in stats_df.columns:
+            if 'GAME_DATE' not in stats_df.columns:
                 stats_df = stats_df.copy()
-                stats_df['GAME_DATE'] = pd.to_datetime(stats_df['GAME_DATE_HOME'])
+                if 'GAME_DATE_HOME' in stats_df.columns:
+                    stats_df['GAME_DATE'] = pd.to_datetime(stats_df['GAME_DATE_HOME'])
+                else:
+                    # Try to find any date column
+                    date_cols = [col for col in stats_df.columns if 'DATE' in col]
+                    if date_cols:
+                        stats_df['GAME_DATE'] = pd.to_datetime(stats_df[date_cols[0]])
+                    else:
+                        # If no date columns found, use current date as fallback
+                        print("No date column found, using current date as fallback")
+                        import datetime
+                        stats_df['GAME_DATE'] = datetime.datetime.now()
             
             # Make sure stats_df has a TARGET column (for prediction scenarios)
             if 'TARGET' not in stats_df.columns:
