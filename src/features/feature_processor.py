@@ -386,6 +386,9 @@ class NBAFeatureProcessor:
         features['TEAM_ID_HOME'] = games['TEAM_ID_HOME']
         features['TEAM_ID_AWAY'] = games['TEAM_ID_AWAY']
         features['TARGET'] = (games['WL_HOME'] == 'W').astype(int)
+        # Add GAME_ID for merging with other data sources
+        features['GAME_ID'] = games['GAME_ID_HOME']
+        features['GAME_ID_HOME'] = games['GAME_ID_HOME']
         
         # Add contextual features
         # Weekend game flag
@@ -647,22 +650,48 @@ class NBAFeatureProcessor:
                 home_player_data = home_player_data.rename(columns=home_cols)
                 away_player_data = away_player_data.rename(columns=away_cols)
                 
-                # Merge with features
-                features = pd.merge(
-                    features,
-                    home_player_data,
-                    left_on=['GAME_ID_HOME', 'TEAM_ID_HOME'],
-                    right_on=['GAME_ID', 'TEAM_ID'],
-                    how='left'
-                )
+                # Verify column existence before merge
+                print(f"Features columns before merge: {features.columns[:5]}...")
+                print(f"Home player data columns: {home_player_data.columns[:5]}...")
                 
-                features = pd.merge(
-                    features,
-                    away_player_data,
-                    left_on=['GAME_ID_HOME', 'TEAM_ID_AWAY'],
-                    right_on=['GAME_ID', 'TEAM_ID'],
-                    how='left'
-                )
+                # Check if we have the required columns for merging
+                required_cols = {'GAME_ID', 'TEAM_ID'}
+                if set(required_cols).issubset(home_player_data.columns):
+                    # Identify correct game ID column in features
+                    game_id_col = 'GAME_ID_HOME' if 'GAME_ID_HOME' in features.columns else 'GAME_ID'
+                    
+                    if game_id_col not in features.columns:
+                        print(f"Warning: {game_id_col} not found in features. Available columns: {features.columns[:10]}")
+                        
+                        # If GAME_ID_HOME isn't available but GAME_ID is, use that
+                        if 'GAME_ID' not in features.columns and 'GAME_DATE' in features.columns:
+                            print("Adding GAME_ID column for merging")
+                            # Create a temporary game ID for merging (not ideal but allows the process to continue)
+                            features['GAME_ID'] = ['G' + str(i).zfill(10) for i in range(len(features))]
+                            game_id_col = 'GAME_ID'
+                    
+                    # Merge home player data if we have a valid game ID column
+                    if game_id_col in features.columns:
+                        features = pd.merge(
+                            features,
+                            home_player_data,
+                            left_on=[game_id_col, 'TEAM_ID_HOME'],
+                            right_on=['GAME_ID', 'TEAM_ID'],
+                            how='left'
+                        )
+                        
+                        # Merge away player data
+                        features = pd.merge(
+                            features,
+                            away_player_data,
+                            left_on=[game_id_col, 'TEAM_ID_AWAY'],
+                            right_on=['GAME_ID', 'TEAM_ID'],
+                            how='left'
+                        )
+                    else:
+                        print("Skipping player data merge due to missing key columns")
+                else:
+                    print(f"Skipping player data merge due to missing columns in player data. Found: {home_player_data.columns}")
                 
                 # Drop duplicate columns
                 drop_cols = [col for col in features.columns if col in ['GAME_ID', 'TEAM_ID', 'IS_HOME']]

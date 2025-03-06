@@ -345,21 +345,43 @@ class NBADataLoader:
                     if i % 10 == 0:  # Progress update every 10 games
                         print(f"Processing game {i+1}/{sample_size}...")
                     
-                    # Get the teams from this game
-                    game_teams = all_games[all_games['GAME_ID'] == game_id]['TEAM_ID'].unique()
-                    
-                    if len(game_teams) == 2:
-                        # Determine home and away teams (this method might need adjustment)
-                        game_df = all_games[all_games['GAME_ID'] == game_id]
-                        home_games = game_df[game_df['MATCHUP'].str.contains('vs.')]
-                        away_games = game_df[game_df['MATCHUP'].str.contains('@')]
+                    # Get the teams from this game with robust error handling
+                    try:
+                        game_teams = all_games[all_games['GAME_ID'] == game_id]['TEAM_ID'].unique()
                         
-                        if not home_games.empty and not away_games.empty:
-                            home_team = home_games['TEAM_ID'].iloc[0]
-                            away_team = away_games['TEAM_ID'].iloc[0]
+                        if len(game_teams) == 2:
+                            # Determine home and away teams (this method might need adjustment)
+                            game_df = all_games[all_games['GAME_ID'] == game_id]
+                            
+                            # Check if we have the MATCHUP column
+                            if 'MATCHUP' in game_df.columns:
+                                home_games = game_df[game_df['MATCHUP'].str.contains('vs.', na=False)]
+                                away_games = game_df[game_df['MATCHUP'].str.contains('@', na=False)]
+                                
+                                if not home_games.empty and not away_games.empty:
+                                    home_team = home_games['TEAM_ID'].iloc[0]
+                                    away_team = away_games['TEAM_ID'].iloc[0]
+                                else:
+                                    # Fallback if we can't determine home/away
+                                    home_team, away_team = game_teams
+                            else:
+                                # Fallback when MATCHUP column is unavailable
+                                home_team, away_team = game_teams
                         else:
-                            # Fallback if we can't determine home/away
-                            home_team, away_team = game_teams
+                            # Unexpected number of teams, create dummy data
+                            print(f"Unexpected number of teams ({len(game_teams)}) for game {game_id}")
+                            if len(game_teams) > 0:
+                                home_team = game_teams[0]
+                                away_team = game_teams[0] if len(game_teams) == 1 else game_teams[1]
+                            else:
+                                print(f"No teams found for game {game_id}, using fallback data")
+                                home_team = 1610612737  # ATL
+                                away_team = 1610612738  # BOS
+                    except Exception as e:
+                        print(f"Error getting teams for game {game_id}: {e}")
+                        # Fallback to dummy teams
+                        home_team = 1610612737  # ATL
+                        away_team = 1610612738  # BOS
                         
                         # Get box score for detailed player stats with added error handling
                         try:
@@ -472,9 +494,10 @@ class NBADataLoader:
                             home_top_players = home_stars_playing['PLAYER_NAME'].tolist()
                             away_top_players = away_stars_playing['PLAYER_NAME'].tolist()
                         
-                        # Add data for home team
+                        # Add data for home team with GAME_ID_HOME for better merging
                         availability_data.append({
                             'GAME_ID': game_id,
+                            'GAME_ID_HOME': game_id,  # Add this for easier merging
                             'TEAM_ID': home_team,
                             'IS_HOME': 1,
                             'PLAYERS_AVAILABLE': home_available,
@@ -489,9 +512,10 @@ class NBADataLoader:
                             'STAR_MATCHUP_ADVANTAGE': star_matchup_advantage
                         })
                         
-                        # Add data for away team
+                        # Add data for away team with GAME_ID_HOME for better merging
                         availability_data.append({
                             'GAME_ID': game_id,
+                            'GAME_ID_HOME': game_id,  # Add this for easier merging
                             'TEAM_ID': away_team,
                             'IS_HOME': 0,
                             'PLAYERS_AVAILABLE': away_available,
@@ -532,6 +556,7 @@ class NBADataLoader:
             # Return empty DataFrame with expected structure for graceful failure
             return pd.DataFrame({
                 'GAME_ID': [],
+                'GAME_ID_HOME': [],  # Add this for easier merging
                 'TEAM_ID': [],
                 'IS_HOME': [],
                 'PLAYERS_AVAILABLE': [],

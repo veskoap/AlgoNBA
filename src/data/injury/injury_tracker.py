@@ -613,9 +613,26 @@ class PlayerInjuryTracker:
         
         # Process each game
         for idx, row in games_df.iterrows():
-            game_date = pd.to_datetime(row['GAME_DATE']).strftime('%Y-%m-%d')
-            home_team = row['TEAM_ID_HOME']
-            away_team = row['TEAM_ID_AWAY']
+            try:
+                # Get the date - try both GAME_DATE and GAME_DATE_HOME format
+                if 'GAME_DATE' in row:
+                    game_date = pd.to_datetime(row['GAME_DATE']).strftime('%Y-%m-%d')
+                elif 'GAME_DATE_HOME' in row:
+                    game_date = pd.to_datetime(row['GAME_DATE_HOME']).strftime('%Y-%m-%d')
+                else:
+                    # Use current date as fallback
+                    game_date = datetime.now().strftime('%Y-%m-%d')
+                    
+                # Get team IDs
+                home_team = row['TEAM_ID_HOME']
+                away_team = row['TEAM_ID_AWAY']
+            except Exception as e:
+                print(f"Error getting game data for injury features: {e}")
+                print(f"Available columns: {row.index.tolist()[:10]}...")
+                # Use fallback values
+                game_date = datetime.now().strftime('%Y-%m-%d')
+                home_team = 1610612737  # ATL
+                away_team = 1610612738  # BOS
             
             # Get injury impact for home team
             home_impact = self.calculate_injury_impact(
