@@ -487,8 +487,11 @@ class NBADataLoader:
                     if self.use_cache:
                         self.cache_manager.set_cache('player_impact', player_cache_params, player_data)
                         print(f"Migrated legacy player data to new cache system")
+                    return player_data
             except Exception as e:
                 print(f"Error loading legacy player cache: {e}")
+                # Initialize empty player_data to avoid reference errors
+                player_data = {}
             
         try:
             from nba_api.stats.endpoints import teamplayerdashboard, boxscoreadvancedv2, playergamelogs

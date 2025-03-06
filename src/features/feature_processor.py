@@ -965,6 +965,13 @@ class NBAFeatureProcessor:
                 print(f"Successfully merged player data with {len(features)} features")
             else:
                 print("No player availability data found to merge")
+                
+                # Add default values for required player availability columns to avoid issues later
+                for col in ['PLAYER_IMPACT_HOME', 'PLAYER_IMPACT_AWAY', 'PLAYER_IMPACT_DIFF', 
+                           'PLAYER_IMPACT_HOME_MOMENTUM', 'PLAYER_IMPACT_AWAY_MOMENTUM', 'PLAYER_IMPACT_MOMENTUM_DIFF']:
+                    if col not in features.columns:
+                        features[col] = 1.0 if 'DIFF' not in col else 0.0
+                print("Added default values for player availability columns")
             
             # Add injury data
             print("Adding player injury features...")

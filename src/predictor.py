@@ -830,7 +830,7 @@ class EnhancedNBAPredictor:
             away_team_abbrev = TEAM_ID_TO_ABBREV.get(away_team_id, str(away_team_id))
             
             # Create a mock prediction with 50% probability
-            from datetime import datetime, date
+            from datetime import datetime as dt, date
             mock_result = {
                 'home_team_id': home_team_id,
                 'away_team_id': away_team_id,
@@ -840,7 +840,7 @@ class EnhancedNBAPredictor:
                 'home_win_probability': 0.5,  # Default 50% for mock
                 'confidence': 0.4,  # Lower confidence for mock prediction
                 'model_type': model_type + " (mock)",
-                'prediction_time': datetime.now().isoformat(),
+                'prediction_time': dt.now().isoformat(),
                 'is_mock': True
             }
             
@@ -867,6 +867,8 @@ class EnhancedNBAPredictor:
         # Handle 'GAME_DATE' column error by first checking if it exists
         game_date_value = game_features['GAME_DATE'].iloc[0] if 'GAME_DATE' in game_features.columns else None
         
+        from datetime import datetime as dt
+        
         result = {
             'home_team_id': home_team_id,
             'away_team_id': away_team_id,
@@ -876,7 +878,7 @@ class EnhancedNBAPredictor:
             'home_win_probability': float(probs[0]),
             'confidence': float(confidence[0]),
             'model_type': model_type,
-            'prediction_time': datetime.now().isoformat()
+            'prediction_time': dt.now().isoformat()
         }
         
         # Cache the prediction

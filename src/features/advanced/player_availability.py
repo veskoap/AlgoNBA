@@ -176,7 +176,8 @@ class PlayerAvailabilityProcessor:
                         
                         # Calculate return date
                         recovery_days = int(injury_games * 2)  # Convert to int - Approximate days between games
-                        return_date = game_date + datetime.timedelta(days=recovery_days)
+                        from datetime import timedelta
+                        return_date = game_date + timedelta(days=recovery_days)
                         
                         # Store the return date
                         self._add_player_return(team_id, player, return_date)
@@ -195,13 +196,13 @@ class PlayerAvailabilityProcessor:
         
         return availability
     
-    def _add_player_return(self, team_id: int, player_id: str, return_date: datetime.datetime) -> None:
+    def _add_player_return(self, team_id: int, player_id: str, return_date) -> None:
         """Track when an injured player will return."""
         if team_id not in self.team_adjustments:
             self.team_adjustments[team_id] = {}
         self.team_adjustments[team_id][player_id] = return_date
     
-    def _get_player_return(self, team_id: int, player_id: str) -> Optional[datetime.datetime]:
+    def _get_player_return(self, team_id: int, player_id: str) -> Optional[datetime]:
         """Get the return date for an injured player."""
         if team_id in self.team_adjustments and player_id in self.team_adjustments[team_id]:
             return self.team_adjustments[team_id][player_id]
