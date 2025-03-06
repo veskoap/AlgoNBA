@@ -379,6 +379,38 @@ class NBAFeatureProcessor:
             pd.DataFrame: Enhanced feature set with team statistics
         """
         print("Calculating advanced team statistics...")
+        
+        # Check if the DataFrame is empty or has very little data
+        if games.empty or len(games) == 0:
+            print("Warning: Empty game data provided. Creating minimal feature set for compatibility.")
+            # Create a minimal feature DataFrame with required columns for downstream compatibility
+            min_features = pd.DataFrame({
+                'GAME_DATE': [pd.Timestamp('2023-01-01')],
+                'TEAM_ID_HOME': [1610612737],  # ATL Hawks team ID
+                'TEAM_ID_AWAY': [1610612738],  # BOS Celtics team ID
+                'TARGET': [0],
+                'GAME_ID': ['SAMPLE_ID'],
+                'GAME_ID_HOME': ['SAMPLE_ID'],
+                'WEEKEND_GAME': [0],
+                'NATIONAL_TV': [0],
+                'RIVALRY_MATCHUP': [0],
+                'STADIUM_HOME_ADVANTAGE': [1.0],
+                'REST_DAYS_HOME': [3],
+                'REST_DAYS_AWAY': [2],
+                'H2H_GAMES': [0],
+                'H2H_WIN_PCT': [0.5],
+                'DAYS_SINCE_H2H': [365],
+                'LAST_GAME_HOME': [0]
+            })
+            
+            # Add rolling window stats with default values
+            for window in self.lookback_windows:
+                for team_type in ['HOME', 'AWAY']:
+                    for stat in ['WIN_count', 'WIN_mean', 'PTS_mean', 'OFF_RTG_mean', 'DEF_RTG_mean']:
+                        min_features[f"{stat}_{team_type}_{window}D"] = [0.5 if 'mean' in stat else 10]
+                        
+            print("Created minimal feature set with default values")
+            return min_features
 
         # Initialize features DataFrame and ensure proper sorting
         features = pd.DataFrame()

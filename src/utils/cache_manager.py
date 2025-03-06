@@ -54,21 +54,38 @@ class CacheManager:
             is_colab = False
             
         if is_colab:
-            # In Colab, use a directory in /content that persists during session
-            colab_cache = '/content/algoNBA_cache'
+            # In Colab, try to mount Drive first for persistence if not already mounted
+            drive_mount_path = '/content/drive'
+            drive_cache_path = '/content/drive/MyDrive/AlgoNBA/cache'
+            local_cache_path = '/content/algoNBA_cache'
             
-            # Also check if a Google Drive is mounted and prefer that for persistence
-            drive_path = '/content/drive/MyDrive/AlgoNBA/cache'
-            if os.path.exists('/content/drive'):
-                # Drive is mounted, check if our directory exists or can be created
+            # Attempt to mount Drive if not already mounted
+            if not os.path.exists(drive_mount_path):
+                print("Google Drive not mounted. Attempting to mount...")
                 try:
-                    # Try creating the directory if it doesn't exist
-                    os.makedirs(drive_path, exist_ok=True)
-                    return drive_path
-                except Exception:
-                    # Fall back to session storage
-                    return colab_cache
-            return colab_cache
+                    from google.colab import drive
+                    drive.mount(drive_mount_path)
+                    print("Google Drive mounted successfully")
+                except Exception as e:
+                    print(f"Error mounting Google Drive: {e}")
+                    print(f"Using local cache at {local_cache_path} instead")
+                    return local_cache_path
+            
+            # If Drive is now mounted (or was already), try to use it
+            if os.path.exists(drive_mount_path):
+                try:
+                    # Try creating our cache directory
+                    os.makedirs(drive_cache_path, exist_ok=True)
+                    print(f"Using Google Drive cache at {drive_cache_path}")
+                    return drive_cache_path
+                except Exception as e:
+                    print(f"Could not create cache in Google Drive: {e}")
+                    print(f"Using local cache at {local_cache_path} instead")
+                    return local_cache_path
+            
+            # Fallback to local Colab cache
+            print(f"Using local cache at {local_cache_path}")
+            return local_cache_path
             
         else:
             # Running locally, check the platform

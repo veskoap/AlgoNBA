@@ -70,8 +70,8 @@ class EnhancedNBAPredictor:
         if hardware_optimization:
             self._configure_hardware_optimizations()
         
-        # Initialize components with caching support
-        self.data_loader = NBADataLoader(use_cache=use_cache, cache_max_age_days=cache_max_age_days)
+        # Initialize components with caching support - pass the same cache_dir
+        self.data_loader = NBADataLoader(use_cache=use_cache, cache_max_age_days=cache_max_age_days, cache_dir=cache_dir)
         self.feature_processor = NBAFeatureProcessor(self.lookback_windows)
         self.player_processor = PlayerAvailabilityProcessor()
         
@@ -287,6 +287,28 @@ class EnhancedNBAPredictor:
         """Train all prediction models with caching support."""
         if self.features is None:
             raise ValueError("Features not available. Call fetch_and_process_data first.")
+            
+        # Check if we have meaningful data for training
+        if len(self.features) <= 1:  # 1 or fewer samples isn't enough for meaningful training
+            print("Warning: Insufficient data for meaningful training (only {} samples found)".format(len(self.features)))
+            print("Will use mock models for demonstration purposes only")
+            # Create mock models that will just return default predictions
+            if self.use_enhanced_models:
+                from sklearn.dummy import DummyClassifier
+                dummy = DummyClassifier(strategy='constant', constant=0.5)
+                X = self.features.iloc[:, :5]  # Use a few columns for dummy training
+                y = np.zeros(len(X))  # Create a dummy target
+                dummy.fit(X, y)
+                
+                # Set dummy models for prediction
+                self.ensemble_model.models = {'dummy': dummy}
+                self.deep_model_trainer.model = dummy
+                if self.hybrid_model:
+                    self.hybrid_model.ensemble_model = self.ensemble_model
+                    self.hybrid_model.deep_model = self.deep_model_trainer
+                
+                print("Created mock models due to insufficient training data")
+                return
         
         # Check for cached trained models
         if self.use_cache:
