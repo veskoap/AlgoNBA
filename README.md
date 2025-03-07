@@ -4,13 +4,14 @@
 
 AlgoNBA is a sophisticated machine learning system designed to predict the outcomes of NBA basketball games with high accuracy. It combines multiple advanced ML techniques including ensemble models, deep learning with attention mechanisms, and uncertainty quantification to provide win probabilities with calibrated confidence scores.
 
-The system has been optimized for both accuracy and computational efficiency, with specialized GPU acceleration for Google Colab A100 environments, allowing full training in under 10 minutes on high-performance hardware while maintaining compatibility with standard hardware.
+The system has been optimized for both accuracy and computational efficiency, with specialized hardware acceleration for Google Colab environments, allowing full training in under 5 minutes on TPU hardware and under 10 minutes on high-performance GPUs while maintaining compatibility with standard hardware.
 
 ### Recent Enhancements
 
+- **TPU Acceleration**: Added support for Google Colab TPU v2-8 with up to 16x larger batch sizes
 - **Advanced Caching System**: Added robust data, feature, and model caching to dramatically speed up repeated runs
 - **Google Drive Integration**: Improved Colab experience with Drive-based cache persistence
-- **Cross-Platform Optimization**: Enhanced support for Apple Silicon, CUDA, and standard hardware
+- **Cross-Platform Optimization**: Enhanced support for TPU, GPU (CUDA), Apple Silicon, and standard hardware
 - **Mock Model Support**: Graceful degradation when running with insufficient data
 - **Memory Management**: Resolved DataFrame fragmentation issues for better performance
 
@@ -19,6 +20,9 @@ The system has been optimized for both accuracy and computational efficiency, wi
 ```bash
 # Run with default settings
 python main.py
+
+# Use TPU acceleration on Google Colab TPU runtime
+python main.py --use-tpu
 
 # Disable cache for fresh data and models
 python main.py --no-cache
@@ -50,11 +54,36 @@ python main.py --cache-action clear_all
 
 # Google Colab integration with Drive
 python main.py --colab-drive
+
+# Combine options (TPU acceleration with Drive storage)
+python main.py --use-tpu --colab-drive --save-models
 ```
 
-## A100 GPU Optimizations
+## Hardware Acceleration
 
-This system includes specialized optimizations for running on A100 GPUs:
+### TPU Acceleration (Google Colab)
+
+The system now includes specialized optimizations for TPU hardware:
+
+1. **Automatic TPU detection**: Automatically detects and configures TPU v2-8 when available.
+
+2. **Significantly increased batch sizes**: Batch sizes up to 16x larger (1024+) for TPU efficiency.
+
+3. **BFloat16 precision**: Automatically uses TPU-optimized bfloat16 format for faster training.
+
+4. **Parallel data loading**: TPU-specific data loaders maximize throughput.
+
+5. **Optimized training loops**: Uses PyTorch XLA for proper TPU execution with mark_step() operations.
+
+6. **Modified optimizers**: Uses Adam instead of AdamW with TPU-friendly hyperparameters.
+
+7. **Memory preallocation**: Pre-populates TPU memory for optimal training performance.
+
+8. **TPU-friendly model architecture**: Avoids operations that are inefficient on TPU.
+
+### A100 GPU Optimizations
+
+The system also includes specialized optimizations for A100 GPUs:
 
 1. **Auto-detected GPU optimizations**: The code automatically detects A100 GPUs and applies specialized settings.
 

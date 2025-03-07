@@ -515,8 +515,46 @@ class EnhancedDeepModelTrainer:
             prefetch_factor: Number of batches to prefetch in DataLoader.
             num_workers: Number of worker processes for data loading.
         """
-        # Enhanced batch size settings for A100 GPU 
-        if torch.cuda.is_available():
+        # Check for TPU
+        self.is_tpu = False
+        try:
+            import torch_xla.core.xla_model as xm
+            import torch_xla.distributed.parallel_loader as pl
+            
+            devices = xm.get_xla_supported_devices()
+            if devices and 'TPU' in devices[0]:
+                self.device = xm.xla_device()
+                self.is_tpu = True
+                print(f"TPU detected: {self.device}")
+                
+                # TPU-specific optimizations
+                original_batch = batch_size
+                
+                # Much larger batch size for TPU v2-8
+                batch_size = max(1024, batch_size * 16)  # 16x larger batches for TPU
+                
+                print(f"TPU detected: Significantly increasing batch size from {original_batch} to {batch_size}")
+                
+                # Force AMP for TPU
+                use_amp = True
+                
+                # TPU prefers different scheduler types
+                if scheduler_type == "cosine":
+                    print("Adjusting scheduler for TPU: using one_cycle instead of cosine")
+                    scheduler_type = "one_cycle"
+                
+                # Adjust worker threads for TPU
+                num_workers = 4  # TPU works better with fewer workers
+            else:
+                # Not a TPU environment
+                self.is_tpu = False
+                
+        except ImportError:
+            # torch_xla not available
+            self.is_tpu = False
+            
+        # Enhanced batch size settings for A100 GPU if not on TPU
+        if not self.is_tpu and torch.cuda.is_available():
             device_name = torch.cuda.get_device_name(0)
             if "A100" in device_name:
                 # A100-specific optimizations
@@ -542,40 +580,41 @@ class EnhancedDeepModelTrainer:
         self.training_features = []  # Store original feature names
         self.validation_metrics = []  # Track validation metrics for each fold
         
-        # GPU optimization
+        # AMP optimization
         self.use_amp = use_amp  # Automatic mixed precision
         
-        # Device configuration with A100 optimization
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        if torch.cuda.is_available():
-            # Set device to the fastest available GPU (Colab gives access to exactly one)
-            device_count = torch.cuda.device_count()
-            if device_count > 0:
-                torch.cuda.set_device(0)  # Use first GPU
-                # Check if we have A100
-                device_name = torch.cuda.get_device_name(0)
-                print(f"Using GPU: {device_name}")
-                
-                # Force some tensor operations to GPU to ensure GPU memory usage
-                dummy_tensor = torch.ones(1, device=self.device)
-                del dummy_tensor  # Immediately delete it
-                
-                # Report GPU memory usage
-                total_mem = torch.cuda.get_device_properties(0).total_memory / 1024**3
-                reserved_mem = torch.cuda.memory_reserved(0) / 1024**3
-                allocated_mem = torch.cuda.memory_allocated(0) / 1024**3
-                print(f"GPU Memory: Total={total_mem:.2f}GB, Reserved={reserved_mem:.2f}GB, Allocated={allocated_mem:.2f}GB")
-                
-                if "A100" in device_name:
-                    print("A100 GPU detected! Optimizing for maximum performance.")
-                    # A100-specific optimizations
-                    torch.backends.cudnn.benchmark = True
-                    if torch.cuda.get_device_capability(0)[0] >= 8:  # A100 is compute capability 8.0
-                        print("Enabling TF32 precision for faster training")
-                        torch.backends.cuda.matmul.allow_tf32 = True
-                        torch.backends.cudnn.allow_tf32 = True
-        else:
-            print("Using CPU. GPU is recommended for faster training.")
+        # Device configuration - TPU checked first, then GPU, then CPU
+        if not self.is_tpu:
+            self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+            if torch.cuda.is_available():
+                # Set device to the fastest available GPU (Colab gives access to exactly one)
+                device_count = torch.cuda.device_count()
+                if device_count > 0:
+                    torch.cuda.set_device(0)  # Use first GPU
+                    # Check if we have A100
+                    device_name = torch.cuda.get_device_name(0)
+                    print(f"Using GPU: {device_name}")
+                    
+                    # Force some tensor operations to GPU to ensure GPU memory usage
+                    dummy_tensor = torch.ones(1, device=self.device)
+                    del dummy_tensor  # Immediately delete it
+                    
+                    # Report GPU memory usage
+                    total_mem = torch.cuda.get_device_properties(0).total_memory / 1024**3
+                    reserved_mem = torch.cuda.memory_reserved(0) / 1024**3
+                    allocated_mem = torch.cuda.memory_allocated(0) / 1024**3
+                    print(f"GPU Memory: Total={total_mem:.2f}GB, Reserved={reserved_mem:.2f}GB, Allocated={allocated_mem:.2f}GB")
+                    
+                    if "A100" in device_name:
+                        print("A100 GPU detected! Optimizing for maximum performance.")
+                        # A100-specific optimizations
+                        torch.backends.cudnn.benchmark = True
+                        if torch.cuda.get_device_capability(0)[0] >= 8:  # A100 is compute capability 8.0
+                            print("Enabling TF32 precision for faster training")
+                            torch.backends.cuda.matmul.allow_tf32 = True
+                            torch.backends.cudnn.allow_tf32 = True
+            else:
+                print("Using CPU. GPU is recommended for faster training.")
         
         # DataLoader settings
         self.batch_size = batch_size
@@ -651,14 +690,14 @@ class EnhancedDeepModelTrainer:
                 setattr(feature_scaler, 'feature_names_in_', np.array(X_train.columns))
 
             # Create PyTorch datasets and dataloaders for batch processing
-            # Create tensors and force to GPU if available
+            # Create tensors
             X_train_tensor = torch.FloatTensor(X_train_scaled)
             y_train_tensor = torch.LongTensor(y_train.values)
             X_val_tensor = torch.FloatTensor(X_val_scaled)
             y_val_tensor = torch.LongTensor(y_val.values)
             
             # Log memory usage after tensor creation
-            if torch.cuda.is_available():
+            if torch.cuda.is_available() and not self.is_tpu:
                 # Move smaller tensors to GPU to verify GPU memory usage
                 dummy = torch.zeros(1, X_train_scaled.shape[1], device=self.device)
                 print(f"Dummy tensor on GPU: {dummy.device}")
@@ -669,26 +708,54 @@ class EnhancedDeepModelTrainer:
             train_dataset = TensorDataset(X_train_tensor, y_train_tensor)
             val_dataset = TensorDataset(X_val_tensor, y_val_tensor)
             
-            # Create dataloaders with GPU optimization
-            train_loader = DataLoader(
-                train_dataset,
-                batch_size=self.batch_size,
-                shuffle=True,
-                pin_memory=torch.cuda.is_available(),  # Speed up CPU->GPU transfers
-                num_workers=self.num_workers,
-                prefetch_factor=self.prefetch_factor if self.num_workers > 0 else None,
-                persistent_workers=self.num_workers > 0
-            )
-            
-            val_loader = DataLoader(
-                val_dataset,
-                batch_size=self.batch_size,
-                shuffle=False,
-                pin_memory=torch.cuda.is_available(),
-                num_workers=self.num_workers,
-                prefetch_factor=self.prefetch_factor if self.num_workers > 0 else None,
-                persistent_workers=self.num_workers > 0
-            )
+            # Create dataloaders with appropriate optimization for device
+            # We need different handling for TPU vs GPU
+            if self.is_tpu:
+                import torch_xla.core.xla_model as xm
+                import torch_xla.distributed.parallel_loader as pl
+                
+                train_loader = DataLoader(
+                    train_dataset,
+                    batch_size=self.batch_size,
+                    shuffle=True,
+                    num_workers=self.num_workers,
+                    drop_last=True,  # TPU performs better with fixed size batches
+                )
+                
+                val_loader = DataLoader(
+                    val_dataset,
+                    batch_size=self.batch_size,
+                    shuffle=False,
+                    num_workers=self.num_workers,
+                    drop_last=False
+                )
+                
+                # Wrap loaders with TPU ParallelLoader for better performance
+                train_loader = pl.ParallelLoader(train_loader, [self.device]).per_device_loader(self.device)
+                val_loader = pl.ParallelLoader(val_loader, [self.device]).per_device_loader(self.device)
+                
+                print(f"Created TPU-optimized data loaders with batch size {self.batch_size}")
+            else:
+                # Standard GPU/CPU data loaders
+                train_loader = DataLoader(
+                    train_dataset,
+                    batch_size=self.batch_size,
+                    shuffle=True,
+                    pin_memory=torch.cuda.is_available(),  # Speed up CPU->GPU transfers
+                    num_workers=self.num_workers,
+                    prefetch_factor=self.prefetch_factor if self.num_workers > 0 else None,
+                    persistent_workers=self.num_workers > 0
+                )
+                
+                val_loader = DataLoader(
+                    val_dataset,
+                    batch_size=self.batch_size,
+                    shuffle=False,
+                    pin_memory=torch.cuda.is_available(),
+                    num_workers=self.num_workers,
+                    prefetch_factor=self.prefetch_factor if self.num_workers > 0 else None,
+                    persistent_workers=self.num_workers > 0
+                )
             
             # Initialize enhanced model with configurable architecture
             model = EnhancedNBAPredictor(
@@ -709,13 +776,22 @@ class EnhancedDeepModelTrainer:
             else:
                 criterion = nn.CrossEntropyLoss()
                 
-            # Optimizer with better defaults for A100
-            optimizer = optim.AdamW(
-                model.parameters(), 
-                lr=self.learning_rate, 
-                weight_decay=self.weight_decay,
-                eps=1e-7  # More stable epsilon for A100
-            )
+            # Optimizer with hardware-specific defaults
+            if self.is_tpu:
+                # TPU performs better with Adam than AdamW
+                optimizer = optim.Adam(
+                    model.parameters(), 
+                    lr=self.learning_rate,
+                    eps=1e-8  # TPU performs better with a larger epsilon
+                )
+            else:
+                # AdamW for GPU/CPU
+                optimizer = optim.AdamW(
+                    model.parameters(), 
+                    lr=self.learning_rate, 
+                    weight_decay=self.weight_decay,
+                    eps=1e-7  # More stable epsilon for A100
+                )
             
             # Configure learning rate scheduler based on selection
             if self.scheduler_type == "cosine":
@@ -725,7 +801,7 @@ class EnhancedDeepModelTrainer:
                     T_mult=2  # Double the period after each restart
                 )
             elif self.scheduler_type == "one_cycle":
-                # One cycle learning rate (better for A100 with fewer epochs)
+                # One cycle learning rate (better for TPU and A100 with fewer epochs)
                 scheduler = optim.lr_scheduler.OneCycleLR(
                     optimizer,
                     max_lr=self.learning_rate * 10,
@@ -751,15 +827,16 @@ class EnhancedDeepModelTrainer:
                 )
 
             # Initialize mixed precision training (if enabled)
-            if self.use_amp and torch.cuda.is_available():
+            # For TPU we don't need a scaler - it uses bfloat16 automatically
+            if self.use_amp and torch.cuda.is_available() and not self.is_tpu:
                 # Create GradScaler without any parameters to ensure compatibility
                 print("Initializing GradScaler for mixed precision training")
                 scaler = GradScaler()
             else:
                 scaler = None
             
-            # Log GPU memory before training
-            if torch.cuda.is_available():
+            # Log memory before training
+            if torch.cuda.is_available() and not self.is_tpu:
                 allocated_mem_before = torch.cuda.memory_allocated(0) / 1024**3
                 print(f"GPU Memory allocated before training: {allocated_mem_before:.2f}GB")
 
@@ -771,56 +848,72 @@ class EnhancedDeepModelTrainer:
             best_model_state = None
 
             for epoch in range(self.epochs):
-                # Force CUDA memory allocation at the beginning of each epoch if on GPU
-                if torch.cuda.is_available() and epoch == 0:
-                    print("Optimizing initial GPU memory allocation...")
-                    
-                    # Detect A100 GPU and set specialized parameters
-                    is_a100 = torch.cuda.is_available() and "A100" in torch.cuda.get_device_name(0)
-                    
-                    # For A100, use much larger batches and more aggressive memory pre-allocation
-                    if is_a100:
-                        # A100 has more memory, use very large batches for pre-allocation
-                        large_batch_size = max(self.batch_size * 8, 512)
-                        print(f"A100 detected: Using extra-large batch of {large_batch_size} for optimized initialization")
+                # Force memory allocation at the beginning of epoch for performance
+                if epoch == 0:
+                    if self.is_tpu:
+                        print("Optimizing initial TPU memory allocation...")
+                        # Create a large batch for TPU pre-allocation
+                        large_batch_size = max(self.batch_size * 4, 2048)
+                        print(f"TPU: Using large batch of {large_batch_size} for initialization")
                         
-                        # Create multiple large batches to properly utilize A100 memory
-                        dummy_input = torch.zeros(large_batch_size, X_train.shape[1], device=self.device)
-                        with torch.cuda.amp.autocast(enabled=self.use_amp):
-                            dummy_out = model(dummy_input)
-                        
-                        # Force more memory allocation with multiple batches
-                        print("Priming GPU memory for optimal performance...")
-                        for i in range(5):  # More batches for A100
-                            dummy_input2 = torch.randn(large_batch_size, X_train.shape[1], device=self.device)
-                            with torch.cuda.amp.autocast(enabled=self.use_amp):
-                                model(dummy_input2)
-                    else:
-                        # For other GPUs, use smaller batch sizes
-                        large_batch_size = max(self.batch_size * 4, 128)
-                        print(f"Using large batch of {large_batch_size} for initialization")
-                        
-                        # Create a larger batch and move it to GPU
+                        # Create a larger batch for pre-allocation
+                        import torch_xla.core.xla_model as xm
                         dummy_input = torch.zeros(large_batch_size, X_train.shape[1], device=self.device)
                         dummy_out = model(dummy_input)
+                        xm.mark_step()  # Force TPU execution
                         
-                        # Create multiple batches to force memory usage
-                        for i in range(3):  # Fewer batches for non-A100
-                            dummy_input2 = torch.randn(large_batch_size, X_train.shape[1], device=self.device)
-                            model(dummy_input2)
-                    
-                    # Clean up
-                    del dummy_input, dummy_out, dummy_input2
-                    torch.cuda.empty_cache()
-                    
-                    # Log memory usage
-                    allocated_mem = torch.cuda.memory_allocated(0) / 1024**3
-                    reserved_mem = torch.cuda.memory_reserved(0) / 1024**3
-                    print(f"Epoch start GPU memory: Allocated={allocated_mem:.2f}GB, Reserved={reserved_mem:.2f}GB")
-                    
-                    # Report model size on device
-                    model_size = sum(p.numel() * p.element_size() for p in model.parameters()) / 1024**3
-                    print(f"Model size on GPU: {model_size:.4f}GB")
+                        # Clean up
+                        del dummy_input, dummy_out
+                        
+                    elif torch.cuda.is_available():
+                        print("Optimizing initial GPU memory allocation...")
+                        
+                        # Detect A100 GPU and set specialized parameters
+                        is_a100 = torch.cuda.is_available() and "A100" in torch.cuda.get_device_name(0)
+                        
+                        # For A100, use much larger batches and more aggressive memory pre-allocation
+                        if is_a100:
+                            # A100 has more memory, use very large batches for pre-allocation
+                            large_batch_size = max(self.batch_size * 8, 512)
+                            print(f"A100 detected: Using extra-large batch of {large_batch_size} for optimized initialization")
+                            
+                            # Create multiple large batches to properly utilize A100 memory
+                            dummy_input = torch.zeros(large_batch_size, X_train.shape[1], device=self.device)
+                            with torch.cuda.amp.autocast(enabled=self.use_amp):
+                                dummy_out = model(dummy_input)
+                            
+                            # Force more memory allocation with multiple batches
+                            print("Priming GPU memory for optimal performance...")
+                            for i in range(5):  # More batches for A100
+                                dummy_input2 = torch.randn(large_batch_size, X_train.shape[1], device=self.device)
+                                with torch.cuda.amp.autocast(enabled=self.use_amp):
+                                    model(dummy_input2)
+                        else:
+                            # For other GPUs, use smaller batch sizes
+                            large_batch_size = max(self.batch_size * 4, 128)
+                            print(f"Using large batch of {large_batch_size} for initialization")
+                            
+                            # Create a larger batch and move it to GPU
+                            dummy_input = torch.zeros(large_batch_size, X_train.shape[1], device=self.device)
+                            dummy_out = model(dummy_input)
+                            
+                            # Create multiple batches to force memory usage
+                            for i in range(3):  # Fewer batches for non-A100
+                                dummy_input2 = torch.randn(large_batch_size, X_train.shape[1], device=self.device)
+                                model(dummy_input2)
+                        
+                        # Clean up
+                        del dummy_input, dummy_out, dummy_input2
+                        torch.cuda.empty_cache()
+                        
+                        # Log memory usage
+                        allocated_mem = torch.cuda.memory_allocated(0) / 1024**3
+                        reserved_mem = torch.cuda.memory_reserved(0) / 1024**3
+                        print(f"Epoch start GPU memory: Allocated={allocated_mem:.2f}GB, Reserved={reserved_mem:.2f}GB")
+                        
+                        # Report model size on device
+                        model_size = sum(p.numel() * p.element_size() for p in model.parameters()) / 1024**3
+                        print(f"Model size on GPU: {model_size:.4f}GB")
                 
                 # ----- Training phase -----
                 model.train()
@@ -829,14 +922,34 @@ class EnhancedDeepModelTrainer:
                 
                 # Process mini-batches
                 for batch_idx, (inputs, targets) in enumerate(train_loader):
-                    # Move batch to device
-                    inputs, targets = inputs.to(self.device), targets.to(self.device)
+                    # Move batch to device if needed (for TPU, the data is already on device)
+                    if not self.is_tpu:
+                        inputs, targets = inputs.to(self.device), targets.to(self.device)
                     
                     # Zero gradients
                     optimizer.zero_grad()
                     
-                    # Forward pass with mixed precision (if enabled)
-                    if scaler is not None:
+                    # TPU-specific training path
+                    if self.is_tpu:
+                        import torch_xla.core.xla_model as xm
+                        
+                        # TPU uses bfloat16 automatically if XLA_USE_BF16=1
+                        outputs = model(inputs)
+                        loss = criterion(outputs, targets)
+                        loss.backward()
+                        
+                        # Gradient clipping if needed
+                        if self.gradient_clip > 0:
+                            torch.nn.utils.clip_grad_norm_(model.parameters(), self.gradient_clip)
+                        
+                        # Optimizer step - for TPU we need to use xm.optimizer_step
+                        xm.optimizer_step(optimizer)
+                        
+                        # Mark step for TPU execution
+                        xm.mark_step()
+                        
+                    # GPU with mixed precision path
+                    elif scaler is not None:
                         with compatible_autocast():
                             outputs = model(inputs)
                             loss = criterion(outputs, targets)
@@ -852,6 +965,8 @@ class EnhancedDeepModelTrainer:
                         # Step optimizer and update scaler
                         scaler.step(optimizer)
                         scaler.update()
+                    
+                    # CPU or GPU without mixed precision path
                     else:
                         # Standard precision training
                         outputs = model(inputs)
@@ -881,9 +996,11 @@ class EnhancedDeepModelTrainer:
                 
                 with torch.no_grad():
                     for inputs, targets in val_loader:
-                        inputs, targets = inputs.to(self.device), targets.to(self.device)
+                        # Move data to device if needed (for TPU, already on device)
+                        if not self.is_tpu:
+                            inputs, targets = inputs.to(self.device), targets.to(self.device)
                         
-                        # Forward pass (no need for mixed precision in eval)
+                        # Forward pass
                         outputs = model(inputs)
                         loss = criterion(outputs, targets)
                         probs = torch.softmax(outputs, dim=1)[:, 1]
@@ -893,8 +1010,16 @@ class EnhancedDeepModelTrainer:
                         val_steps += 1
                         
                         # Store predictions and targets for computing metrics
-                        val_preds_all.append(probs.cpu().numpy())
-                        val_targets_all.append(targets.cpu().numpy())
+                        # For TPU, we need to transfer results back to CPU first
+                        if self.is_tpu:
+                            import torch_xla.core.xla_model as xm
+                            val_preds_all.append(probs.cpu().numpy())
+                            val_targets_all.append(targets.cpu().numpy())
+                            # Mark step for TPU execution
+                            xm.mark_step()
+                        else:
+                            val_preds_all.append(probs.cpu().numpy())
+                            val_targets_all.append(targets.cpu().numpy())
                 
                 # Combine predictions
                 val_preds = np.concatenate(val_preds_all)
@@ -917,7 +1042,18 @@ class EnhancedDeepModelTrainer:
                 if avg_val_loss < best_val_loss:
                     best_val_loss = avg_val_loss
                     patience_counter = 0
-                    best_model_state = {k: v.cpu() for k, v in model.state_dict().items()}  # Store on CPU to save GPU memory
+                    
+                    # For TPU, we need special handling to move model state to CPU
+                    if self.is_tpu:
+                        import torch_xla.core.xla_model as xm
+                        # Clone model parameters to CPU for saving
+                        best_model_state = {k: v.cpu() for k, v in model.state_dict().items()}
+                        # Mark step to ensure TPU operations complete
+                        xm.mark_step()
+                    else:
+                        # For GPU, move to CPU to save memory
+                        best_model_state = {k: v.cpu() for k, v in model.state_dict().items()}
+                        
                     best_metrics = {
                         'accuracy': acc,
                         'brier_score': brier,
@@ -927,8 +1063,8 @@ class EnhancedDeepModelTrainer:
                     # Print progress for best epoch
                     print(f"Epoch {epoch}: Val Loss: {avg_val_loss:.4f}, Acc: {acc:.3f}, AUC: {auc:.3f}")
                     
-                    # Monitor GPU memory usage for best epochs
-                    if torch.cuda.is_available():
+                    # Monitor memory usage for best epochs
+                    if torch.cuda.is_available() and not self.is_tpu:
                         allocated_mem = torch.cuda.memory_allocated(0) / 1024**3
                         print(f"Epoch {epoch} GPU Memory: {allocated_mem:.2f}GB")
                 else:
@@ -939,14 +1075,23 @@ class EnhancedDeepModelTrainer:
                     print(f"Early stopping at epoch {epoch}")
                     break
                 
-                # Clear GPU cache periodically to avoid fragmentation
-                if epoch % 10 == 0 and torch.cuda.is_available():
-                    torch.cuda.empty_cache()
+                # Clear cache periodically to avoid fragmentation
+                if epoch % 10 == 0:
+                    if torch.cuda.is_available() and not self.is_tpu:
+                        torch.cuda.empty_cache()
                     gc.collect()
 
-            # Load best model (transfer back to GPU)
-            best_model_state_gpu = {k: v.to(self.device) for k, v in best_model_state.items()}
-            model.load_state_dict(best_model_state_gpu)
+            # Load best model back to device
+            if self.is_tpu:
+                import torch_xla.core.xla_model as xm
+                best_model_state_device = {k: v.to(self.device) for k, v in best_model_state.items()}
+                model.load_state_dict(best_model_state_device)
+                # Mark step to ensure TPU operations complete
+                xm.mark_step()
+            else:
+                best_model_state_device = {k: v.to(self.device) for k, v in best_model_state.items()}
+                model.load_state_dict(best_model_state_device)
+                
             models.append(model)
             scalers.append(feature_scaler)  # Store the feature scaler for later predictions
             fold_metrics.append(best_metrics)

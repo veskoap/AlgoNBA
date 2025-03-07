@@ -143,7 +143,37 @@ class EnhancedNBAPredictor:
         system = platform.system()
         machine = platform.machine()
         
-        # Apply Apple Silicon (M1/M2) optimizations
+        # Check for TPU availability first (highest priority)
+        try:
+            import torch_xla
+            import torch_xla.core.xla_model as xm
+            
+            # Check if TPU is available
+            devices = xm.get_xla_supported_devices()
+            if devices and 'TPU' in devices[0]:
+                print(f"TPU detected: {devices[0]}")
+                self.device = xm.xla_device()
+                self.is_tpu = True
+                
+                # Set TPU-specific optimization flags
+                os.environ['XLA_USE_BF16'] = '1'  # Enable bfloat16 for TPU v2/v3
+                
+                # Set flags for TPU optimization
+                import torch_xla.debug.metrics as met
+                met.set_metrics_enabled(True)  # Enable metrics collection
+                
+                # Log TPU information
+                print(f"Using TPU device: {self.device}")
+                print("TPU optimizations enabled: bfloat16 precision, metrics collection")
+                
+                return  # TPU setup complete, no need to check other hardware
+            else:
+                self.is_tpu = False
+        except ImportError:
+            # torch_xla not available
+            self.is_tpu = False
+        
+        # Apply Apple Silicon (M1/M2) optimizations if TPU not available
         if system == 'Darwin' and machine == 'arm64':
             os.environ['VECLIB_MAXIMUM_THREADS'] = str(os.cpu_count())
             

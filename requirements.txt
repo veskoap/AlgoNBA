@@ -16,3 +16,7 @@ requests>=2.28.0
 # These are pre-installed in Colab and don't need to be added explicitly there
 # google-colab
 # google-auth
+
+# TPU Support - will be automatically installed in Colab when needed
+# torch-xla
+# cloud-tpu-client

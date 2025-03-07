@@ -55,6 +55,26 @@ suppress_sklearn_warnings()
 # Also add a broader warning filter for other FutureWarnings
 warnings.filterwarnings("ignore", category=FutureWarning)
 
+# Try to detect and setup TPU if running in Colab and requested
+def setup_tpu():
+    """
+    Setup TPU support if available in the environment.
+    Returns True if TPU is available and setup, False otherwise.
+    """
+    try:
+        import torch_xla
+        import torch_xla.core.xla_model as xm
+        
+        # Check if TPU is available
+        devices = xm.get_xla_supported_devices()
+        if devices and 'TPU' in devices[0]:
+            print(f"TPU detected: {devices[0]}")
+            os.environ['XLA_USE_BF16'] = '1'  # Enable bfloat16 for TPU v2/v3
+            return True
+        return False
+    except ImportError:
+        return False
+
 
 def main():
     """
@@ -99,6 +119,8 @@ def main():
                       help='Disable hardware-specific optimizations for M1/CUDA/Colab environments')
     parser.add_argument('--colab-drive', action='store_true',
                       help='Use Google Drive for storage when in Colab environment')
+    parser.add_argument('--use-tpu', action='store_true',
+                      help='Attempt to use TPU acceleration if available (for Google Colab TPU runtime)')
     args = parser.parse_args()
     
     # Use enhanced models by default unless --standard flag is provided
@@ -140,10 +162,25 @@ def main():
     
     # Check if running in Google Colab
     is_colab = False
+    is_tpu_available = False
     try:
         import google.colab
         is_colab = True
         print("Google Colab environment detected")
+        
+        # Check for TPU if requested
+        if args.use_tpu:
+            try:
+                print("Attempting to setup TPU acceleration...")
+                is_tpu_available = setup_tpu()
+                if is_tpu_available:
+                    print("TPU setup successful! Will use TPU acceleration for training.")
+                else:
+                    print("No TPU detected or setup failed. Falling back to GPU/CPU.")
+            except Exception as e:
+                print(f"Error during TPU setup: {e}")
+                print("Falling back to GPU/CPU.")
+                is_tpu_available = False
         
         # Set up Drive integration if requested
         if args.colab_drive:
