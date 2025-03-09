@@ -827,17 +827,25 @@ class EnhancedNBAPredictor:
                     missing_feature_values[feature] = 0
         
         # Add all missing features at once to avoid fragmentation
-        if missing_feature_values:
-            # Create a DataFrame with missing features and concatenate
-            missing_df = pd.DataFrame(missing_feature_values, index=prediction_features.index)
-            prediction_features = pd.concat([prediction_features, missing_df], axis=1)
+        # Prepare data for all features at once to avoid fragmentation
+        all_features = {}
         
+        # Add missing features to the all_features dictionary
+        if missing_feature_values:
+            all_features.update(missing_feature_values)
+        
+        # Add game date if needed
+        if 'GAME_DATE' not in prediction_features.columns:
+            all_features['GAME_DATE'] = game_date
+            
+        # Merge all new features at once to avoid fragmentation
+        if all_features:
+            # Create a DataFrame with all new features and concatenate once
+            new_df = pd.DataFrame(all_features, index=prediction_features.index)
+            prediction_features = pd.concat([prediction_features, new_df], axis=1)
+            
         if missing_features:
             print(f"Added {len(missing_features)} missing features with default values: {missing_features[:5]}...")
-        
-        # Make sure GAME_DATE is kept for reference, even if not used by the model
-        if 'GAME_DATE' not in prediction_features.columns:
-            prediction_features['GAME_DATE'] = game_date
         
         # Cache the prediction features
         if self.use_cache:

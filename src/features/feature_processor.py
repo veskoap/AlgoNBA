@@ -175,31 +175,41 @@ class FeatureTransformer:
             
             # Make sure we're returning a Series, not a DataFrame
             try:
-                # Get home win percentage, safely handling DataFrame case
-                home_series = df[home_col]
-                if isinstance(home_series, pd.DataFrame):
-                    # If it's a DataFrame, extract first column
-                    print(f"Converting {home_col} from DataFrame to Series")
-                    if len(home_series.columns) > 0:
-                        home_values = home_series.iloc[:, 0].values
-                    else:
-                        home_values = np.zeros(len(df))
-                else:
-                    # It's a Series, use values directly
+                # Get home win percentage values
+                if home_col in df.columns:
+                    home_series = df[home_col]
+                    # Convert DataFrame to Series if necessary
+                    if isinstance(home_series, pd.DataFrame):
+                        # If it's a DataFrame, convert to Series properly
+                        print(f"Converting {home_col} from DataFrame to Series")
+                        if len(home_series.columns) > 0:
+                            # Create a proper Series from the first column
+                            home_series = home_series.iloc[:, 0]
+                            df[home_col] = home_series  # Also update in the main dataframe
+                        else:
+                            home_series = pd.Series(np.zeros(len(df)), index=df.index)
+                            df[home_col] = home_series
                     home_values = home_series.values
-                
-                # Get away win percentage, safely handling DataFrame case
-                away_series = df[away_col]
-                if isinstance(away_series, pd.DataFrame):
-                    # If it's a DataFrame, extract first column
-                    print(f"Converting {away_col} from DataFrame to Series")
-                    if len(away_series.columns) > 0:
-                        away_values = away_series.iloc[:, 0].values
-                    else:
-                        away_values = np.zeros(len(df))
                 else:
-                    # It's a Series, use values directly
+                    home_values = np.zeros(len(df))
+                
+                # Get away win percentage values
+                if away_col in df.columns:
+                    away_series = df[away_col]
+                    # Convert DataFrame to Series if necessary
+                    if isinstance(away_series, pd.DataFrame):
+                        # If it's a DataFrame, convert to Series properly
+                        print(f"Converting {away_col} from DataFrame to Series")
+                        if len(away_series.columns) > 0:
+                            # Create a proper Series from the first column
+                            away_series = away_series.iloc[:, 0]
+                            df[away_col] = away_series  # Also update in the main dataframe
+                        else:
+                            away_series = pd.Series(np.zeros(len(df)), index=df.index)
+                            df[away_col] = away_series
                     away_values = away_series.values
+                else:
+                    away_values = np.zeros(len(df))
                 
                 # Create Series explicitly using the cleaned values
                 result = pd.Series(
@@ -836,7 +846,8 @@ class NBAFeatureProcessor:
                 f"{col[0]}_{col[1]}" if col[1] != '' else col[0]
                 for col in rolling_stats.columns
             ]
-
+            
+            # Ensure rolling_stats is properly reset to convert MultiIndex to regular columns
             rolling_stats = rolling_stats.reset_index()
             rolling_stats['GAME_DATE'] = pd.to_datetime(rolling_stats['GAME_DATE'])
 

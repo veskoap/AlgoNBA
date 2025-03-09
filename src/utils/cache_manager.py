@@ -120,7 +120,8 @@ class CacheManager:
         os.makedirs(self.cache_dir, exist_ok=True)
         
         # Create subdirectories for different data types
-        subdirs = ['games', 'features', 'models', 'training', 'predictions']
+        subdirs = ['games', 'features', 'models', 'training', 'predictions', 
+                  'player_availability', 'player_impact']
         for subdir in subdirs:
             os.makedirs(os.path.join(self.cache_dir, subdir), exist_ok=True)
     
@@ -263,6 +264,10 @@ class CacheManager:
         """
         cache_key = self._generate_cache_key(data_type, params)
         cache_path = self.get_cache_path(data_type, cache_key)
+        
+        # Ensure directory exists before writing
+        cache_dir = os.path.dirname(cache_path)
+        os.makedirs(cache_dir, exist_ok=True)
         
         # Save data to file
         with open(cache_path, 'wb') as f:
