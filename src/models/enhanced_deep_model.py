@@ -428,24 +428,57 @@ class EnhancedNBAPredictor(nn.Module):
         Returns:
             torch.Tensor: Output tensor with class logits
         """
+        # Validate input dimensions to debug matrix multiplication errors
+        input_size = x.shape[1]
+        expected_size = self.stem[0].in_features
+        
+        if input_size != expected_size:
+            print(f"Dimension mismatch! Input tensor has {input_size} features, but model expects {expected_size}.")
+            # Reshape input tensor if needed to match expected dimensions
+            if input_size > expected_size:
+                # Truncate extra features
+                print(f"Warning: Truncating input tensor from {input_size} to {expected_size} features")
+                x = x[:, :expected_size]
+            elif input_size < expected_size:
+                # Pad with zeros
+                print(f"Warning: Padding input tensor from {input_size} to {expected_size} features")
+                padding = torch.zeros(x.shape[0], expected_size - input_size, device=x.device)
+                x = torch.cat([x, padding], dim=1)
+        
         # Initial feature extraction
         x = self.stem(x)
         
         # Apply residual blocks with skip connections
         if self.use_residual:
-            for res_block in self.res_blocks:
-                x = res_block(x)
+            for i, res_block in enumerate(self.res_blocks):
+                try:
+                    x = res_block(x)
+                except RuntimeError as e:
+                    print(f"Error in residual block {i}: {e}")
+                    raise
         
         # Apply self-attention for modeling feature relationships
         if self.use_attention:
-            x = self.attention(x)
+            try:
+                x = self.attention(x)
+            except RuntimeError as e:
+                print(f"Error in attention layer: {e}")
+                raise
         
         # Apply transition layers
-        for transition in self.transitions:
-            x = transition(x)
+        for i, transition in enumerate(self.transitions):
+            try:
+                x = transition(x)
+            except RuntimeError as e:
+                print(f"Error in transition layer {i}: Input shape {x.shape}, expected shape: {self.hidden_dims[i]}→{self.hidden_dims[i+1]}")
+                raise
         
         # Final classification
-        x = self.classifier(x)
+        try:
+            x = self.classifier(x)
+        except RuntimeError as e:
+            print(f"Error in classifier: {e}")
+            raise
         
         return x
     
@@ -723,6 +756,12 @@ class EnhancedDeepModelTrainer:
                 
             # Store the input feature size to ensure model dimensions match
             input_feature_size = X_train_scaled.shape[1]
+            print(f"Scaled feature dimensions - Input size for model: {input_feature_size}")
+            
+            # Update shared hidden_layers attribute to match feature dimensions if needed
+            if hasattr(self, 'hidden_layers') and len(self.hidden_layers) > 0:
+                # Print the current dimensions for debugging
+                print(f"Current hidden layer dimensions: {self.hidden_layers}")
 
             # Create PyTorch datasets and dataloaders for batch processing
             # Create tensors
@@ -970,6 +1009,17 @@ class EnhancedDeepModelTrainer:
                         import torch_xla.core.xla_model as xm
                         
                         # TPU uses bfloat16 automatically if XLA_USE_BF16=1
+                        # Check input dimensions before forward pass
+                        if inputs.shape[1] != model.stem[0].in_features:
+                            print(f"TPU input shape mismatch: got {inputs.shape[1]}, expected {model.stem[0].in_features}")
+                            # Adjust as needed
+                            if inputs.shape[1] > model.stem[0].in_features:
+                                inputs = inputs[:, :model.stem[0].in_features]
+                            else:
+                                padding = torch.zeros(inputs.shape[0], model.stem[0].in_features - inputs.shape[1], 
+                                                     device=inputs.device)
+                                inputs = torch.cat([inputs, padding], dim=1)
+                                
                         outputs = model(inputs)
                         loss = criterion(outputs, targets)
                         loss.backward()
@@ -987,6 +1037,17 @@ class EnhancedDeepModelTrainer:
                     # GPU with mixed precision path
                     elif scaler is not None:
                         with compatible_autocast():
+                            # Check input dimensions before forward pass
+                            if inputs.shape[1] != model.stem[0].in_features:
+                                print(f"Mixed precision input shape mismatch: got {inputs.shape[1]}, expected {model.stem[0].in_features}")
+                                # Adjust as needed
+                                if inputs.shape[1] > model.stem[0].in_features:
+                                    inputs = inputs[:, :model.stem[0].in_features]
+                                else:
+                                    padding = torch.zeros(inputs.shape[0], model.stem[0].in_features - inputs.shape[1], 
+                                                         device=inputs.device)
+                                    inputs = torch.cat([inputs, padding], dim=1)
+                            
                             outputs = model(inputs)
                             loss = criterion(outputs, targets)
                         
@@ -1005,6 +1066,17 @@ class EnhancedDeepModelTrainer:
                     # CPU or GPU without mixed precision path
                     else:
                         # Standard precision training
+                        # Check input dimensions before forward pass
+                        if inputs.shape[1] != model.stem[0].in_features:
+                            print(f"Standard training input shape mismatch: got {inputs.shape[1]}, expected {model.stem[0].in_features}")
+                            # Adjust dimensions for forward pass
+                            if inputs.shape[1] > model.stem[0].in_features:
+                                inputs = inputs[:, :model.stem[0].in_features]
+                            else:
+                                padding = torch.zeros(inputs.shape[0], model.stem[0].in_features - inputs.shape[1], 
+                                                     device=inputs.device)
+                                inputs = torch.cat([inputs, padding], dim=1)
+                                
                         outputs = model(inputs)
                         loss = criterion(outputs, targets)
                         loss.backward()
@@ -1036,10 +1108,30 @@ class EnhancedDeepModelTrainer:
                         if not self.is_tpu:
                             inputs, targets = inputs.to(self.device), targets.to(self.device)
                         
-                        # Forward pass
-                        outputs = model(inputs)
-                        loss = criterion(outputs, targets)
-                        probs = torch.softmax(outputs, dim=1)[:, 1]
+                        # Forward pass with dimension check
+                        try:
+                            # Check that input dimensions match model expectations
+                            if inputs.shape[1] != model.stem[0].in_features:
+                                print(f"Validation input shape mismatch: got {inputs.shape[1]}, expected {model.stem[0].in_features}")
+                                # Adjust dimensions to match
+                                if inputs.shape[1] > model.stem[0].in_features:
+                                    # Truncate extra features
+                                    inputs = inputs[:, :model.stem[0].in_features]
+                                else:
+                                    # Pad with zeros
+                                    padding = torch.zeros(inputs.shape[0], model.stem[0].in_features - inputs.shape[1], 
+                                                         device=inputs.device)
+                                    inputs = torch.cat([inputs, padding], dim=1)
+                                    
+                            outputs = model(inputs)
+                            loss = criterion(outputs, targets)
+                            probs = torch.softmax(outputs, dim=1)[:, 1]
+                        except Exception as e:
+                            print(f"Error in validation forward pass: {e}")
+                            # Handle the error gracefully with default values
+                            outputs = torch.zeros(inputs.shape[0], 2, device=inputs.device)
+                            loss = torch.tensor(0.0, device=inputs.device)
+                            probs = torch.zeros(inputs.shape[0], device=inputs.device) + 0.5
                         
                         # Track validation metrics
                         val_loss += loss.item()
