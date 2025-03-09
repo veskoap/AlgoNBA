@@ -5,7 +5,7 @@ This module adds critical player impact features that account for team strength 
 import pandas as pd
 import numpy as np
 from typing import Dict, List, Tuple, Any, Optional
-import datetime
+from datetime import datetime, timedelta
 
 
 class PlayerAvailabilityProcessor:
@@ -254,7 +254,7 @@ class PlayerAvailabilityProcessor:
         
         return availability
     
-    def _add_player_return(self, team_id: int, player_id: str, return_date) -> None:
+    def _add_player_return(self, team_id: int, player_id: str, return_date: datetime) -> None:
         """Track when an injured player will return."""
         if team_id not in self.team_adjustments:
             self.team_adjustments[team_id] = {}
@@ -266,7 +266,7 @@ class PlayerAvailabilityProcessor:
             return self.team_adjustments[team_id][player_id]
         return None
     
-    def _get_available_players(self, team_id: int, game_date: datetime.datetime, 
+    def _get_available_players(self, team_id: int, game_date: datetime, 
                              availability_data: Dict) -> List[str]:
         """
         Get available players for a team on a specific date.
