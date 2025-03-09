@@ -234,7 +234,7 @@ class SelfAttention(nn.Module):
             context = attention_weights * v_expanded  # [batch_size, num_heads, 1, head_dim]
             
             # Reshape back: [batch_size, num_heads, 1, head_dim] -> [batch_size, attention_dim]
-            context = context.squeeze(2).reshape(batch_size, self.attention_dim)
+            context = context.squeeze(2).view(batch_size, self.attention_dim)
             
             # Apply output projection and dropout
             output = self.dropout(self.output_projection(context))
