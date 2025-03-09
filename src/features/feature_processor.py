@@ -1541,16 +1541,26 @@ class NBAFeatureProcessor:
             if col not in ['GAME_DATE', 'TARGET']:
                 try:
                     # Check if column is numeric
-                    col_dtype = enhanced_features[col].dtype
-                    if col_dtype in [np.float64, np.int64]:
-                        # Get quantile values with error handling
-                        try:
-                            q1 = enhanced_features[col].quantile(0.01)
-                            q99 = enhanced_features[col].quantile(0.99)
-                            # Clip values between the 1st and 99th percentiles
-                            enhanced_features[col] = enhanced_features[col].clip(q1, q99)
-                        except Exception as e:
-                            print(f"Skipping clipping for column {col}: {str(e)}")
+                    col_data = enhanced_features[col]
+                    if isinstance(col_data, pd.Series):
+                        col_dtype = col_data.dtype
+                        if col_dtype in [np.float64, np.int64]:
+                            # Get quantile values with error handling
+                            try:
+                                q1 = col_data.quantile(0.01)
+                                q99 = col_data.quantile(0.99)
+                                # Clip values between the 1st and 99th percentiles
+                                enhanced_features[col] = col_data.clip(q1, q99)
+                            except Exception as e:
+                                print(f"Skipping clipping for column {col}: {str(e)}")
+                    elif isinstance(col_data, pd.DataFrame):
+                        # Handle the case where the column is a DataFrame
+                        print(f"Column {col} is a DataFrame, extracting first column")
+                        if len(col_data.columns) > 0:
+                            # Extract the first column
+                            first_col = col_data.iloc[:, 0]
+                            # Replace with the Series
+                            enhanced_features[col] = first_col
                 except Exception as e:
                     print(f"Error checking numeric type for column {col}: {str(e)}")
         
@@ -1559,8 +1569,12 @@ class NBAFeatureProcessor:
         for col in enhanced_features.columns:
             if col not in ['GAME_DATE']:
                 try:
-                    if enhanced_features[col].dtype in [np.float64, np.int64]:
+                    col_data = enhanced_features[col]
+                    if isinstance(col_data, pd.Series) and col_data.dtype in [np.float64, np.int64]:
                         feature_cols.append(col)
+                    elif isinstance(col_data, pd.DataFrame):
+                        # Handle DataFrame columns
+                        print(f"Skipping DataFrame column {col} from feature count")
                 except Exception as e:
                     print(f"Error checking dtype for feature column {col}: {str(e)}")
         print(f"\nCreated {len(feature_cols)} features:")

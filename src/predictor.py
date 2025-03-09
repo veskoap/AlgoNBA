@@ -622,9 +622,16 @@ class EnhancedNBAPredictor:
             mock_features = {}
             if self.features is not None and len(self.features.columns) > 0:
                 # Get some actual feature names if available
-                feature_cols = [col for col in self.features.columns 
-                              if col not in ['GAME_DATE', 'TARGET'] and 
-                              self.features[col].dtype in [np.float64, np.int64]]
+                feature_cols = []
+                for col in self.features.columns:
+                    if col not in ['GAME_DATE', 'TARGET']:
+                        try:
+                            col_data = self.features[col]
+                            if isinstance(col_data, pd.Series) and col_data.dtype in [np.float64, np.int64]:
+                                feature_cols.append(col)
+                        except Exception:
+                            # Skip any problematic columns
+                            pass
                 
                 # Generate mock importance scores for a subset of features
                 sample_cols = feature_cols[:min(n, len(feature_cols))]
@@ -888,7 +895,19 @@ class EnhancedNBAPredictor:
             
         # If we have a record of the training features
         if self.features is not None:
-            feature_cols = [col for col in self.features.columns if col not in ['GAME_DATE', 'TARGET']]
+            feature_cols = []
+            for col in self.features.columns:
+                if col not in ['GAME_DATE', 'TARGET']:
+                    try:
+                        col_data = self.features[col]
+                        if isinstance(col_data, pd.Series):
+                            feature_cols.append(col)
+                        elif isinstance(col_data, pd.DataFrame) and len(col_data.columns) > 0:
+                            # For DataFrame columns, add the first column name with a suffix
+                            feature_cols.append(f"{col}_0")
+                    except Exception:
+                        # Skip problematic columns
+                        pass
             required_features.update(feature_cols)
             
         # Remove non-feature columns

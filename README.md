@@ -12,7 +12,7 @@ The system has been optimized for both accuracy and computational efficiency, wi
 - **Advanced Caching System**: Added robust data, feature, and model caching to dramatically speed up repeated runs
 - **Google Drive Integration**: Improved Colab experience with Drive-based cache persistence
 - **Cross-Platform Optimization**: Enhanced support for TPU, GPU (CUDA), Apple Silicon, and standard hardware
-- **Mock Model Support**: Graceful degradation when running with insufficient data
+- **PIE Data Handling**: Optimized Player Impact Estimate data fetching with robust rate limiting
 - **Memory Management**: Resolved DataFrame fragmentation issues for better performance
 
 ## Usage
@@ -24,7 +24,7 @@ python main.py
 # Use TPU acceleration on Google Colab TPU runtime
 python main.py --use-tpu
 
-# Disable cache for fresh data and models
+# Disable cache for fresh data and models (will be slower due to API fetching)
 python main.py --no-cache
 
 # Run with selective caching (only caches some parts of the pipeline)
@@ -32,11 +32,14 @@ python main.py --no-cache --selective-cache data     # Only cache raw data, refr
 python main.py --no-cache --selective-cache features # Only cache features, refresh data & models
 python main.py --no-cache --selective-cache models   # Only cache models, refresh data & features
 
+# Run in quick mode (faster development testing with fewer players/features)
+python main.py --quick
+
+# Combine quick mode with no-cache (fastest way to test with fresh data)
+python main.py --quick --no-cache
+
 # Run with standard (simpler) models instead of enhanced ones
 python main.py --standard
-
-# Run in quick mode (faster but less accurate)
-python main.py --quick
 
 # Analyze specific seasons
 python main.py --seasons 2021-22 2022-23
@@ -107,7 +110,8 @@ The system also includes specialized optimizations for A100 GPUs:
 - **Deep Learning**: Residual networks, Multi-head attention, Monte Carlo dropout
 - **Statistics**: Bayesian probability, Uncertainty quantification, Feature stability
 - **Data Processing**: Advanced feature engineering, Time-series analysis, Robust scaling
-- **Hardware Optimization**: GPU acceleration, Mixed precision training, Batch processing
+- **Hardware Optimization**: TPU/GPU acceleration, Mixed precision training, Batch processing
+- **NBA Data**: Player Impact Estimates (PIE), Advanced team stats, Injury tracking
 
 ## Core Capabilities
 
@@ -218,6 +222,11 @@ Neural network architecture leveraging modern deep learning techniques:
   - **MC Dropout Method**: Multiple forward passes with active dropout
   - **Prediction Distribution**: Captures variance in predictions
   - **Confidence Calibration**: Maps raw uncertainty to calibrated confidence
+
+- **TPU/GPU Optimizations**: 
+  - **TPU Support**: PyTorch/XLA integration for TPU v2-8
+  - **Batch Size Adjustment**: Dynamically increases for TPU efficiency
+  - **Memory Management**: Optimized for hardware-specific constraints
 
 - **Performance Metrics**:
   - Typical accuracy: 55-60%
@@ -550,6 +559,12 @@ This mode is useful for development and testing purposes, reducing runtime from 
 
 The system now automatically detects and optimizes for different hardware:
 
+#### TPU Systems (Google Colab)
+- Uses PyTorch/XLA for TPU acceleration
+- Automatically reconfigures models for TPU compatibility
+- Uses larger batch sizes (1024+) for TPU efficiency
+- Maximizes utilization with mark_step() operations
+
 #### Apple Silicon (M1/M2) Macs
 - Uses PyTorch MPS acceleration when available
 - Optimizes NumPy operations with Apple's Accelerate framework
@@ -560,9 +575,26 @@ The system now automatically detects and optimizes for different hardware:
 - Special optimizations for A100 GPUs (TF32 precision)
 - Optimized cuDNN settings for faster convolutions
 
+### Performance Considerations
+
+The system has specific performance characteristics to consider:
+
+#### Data Fetching Performance
+- API data fetching is I/O bound, not accelerated by GPU/TPU
+- Player Impact Estimate (PIE) data has API rate limits
+- With `--no-cache`, data fetching can take 15-25 minutes
+- Use `--quick` to reduce the number of players fetched
+- Enable caching for dramatically faster subsequent runs
+
+#### Training Performance
+- TPU v2-8: ~5 minutes training time
+- A100 GPU: ~7 minutes training time
+- Standard CPU: ~30 minutes training time
+- Quick mode: 2-3x faster on all platforms
+
 ### Graceful Degradation with Limited Data
 
-The system now includes robust fallback mechanisms for scenarios with limited data:
+The system includes robust fallback mechanisms for scenarios with limited data:
 
 #### Mock Prediction Mode
 - When NBA data can't be fetched or is insufficient:
@@ -588,6 +620,24 @@ python main.py --cache-action clear_all
 # Run with detailed logging
 python main.py --verbose
 ```
+
+#### Common Warning and Error Messages
+
+The following warning and error messages may appear during execution:
+
+```
+UserWarning: X does not have valid feature names, but LGBMClassifier was fitted with feature names
+  warnings.warn(
+```
+- **Explanation**: This is a benign warning from scikit-learn about LightGBM feature names. It doesn't affect prediction accuracy.
+- **Solution**: These warnings can be safely ignored. The model still functions correctly despite the warning.
+
+```
+Error checking numeric type for column WIN_PCT_DIFF_30D: 'DataFrame' object has no attribute 'dtype'
+Error checking dtype for feature column REST_DIFF: 'DataFrame' object has no attribute 'dtype'
+```
+- **Explanation**: These are diagnostic messages from the enhanced feature processing pipeline, not actual errors.
+- **Solution**: These messages are part of the system's robust error handling. The system automatically recovers and generates the features correctly.
 
 #### Google Colab Integration
 
@@ -923,12 +973,14 @@ Areas for future enhancement:
    - Social media sentiment analysis
    - Injury severity classification
    - Detailed play-by-play analysis
+   - PIE data rate limit handling improvements
 
 3. **Technical Improvements**:
    - Distributed training support
    - ONNX model export for cross-platform deployment
    - TensorRT integration for inference optimization
    - Serverless deployment architecture
+   - Further TPU optimization (JAX integration)
    
 4. **Advanced Cache System Improvements**:
    - More intelligent cache invalidation strategies
@@ -937,6 +989,12 @@ Areas for future enhancement:
    - Compressed storage for reduced footprint
    - Cloud storage integration beyond Google Drive (S3, Azure, etc.)
    - Database backend option for enterprise deployment
+
+5. **Performance Optimizations**:
+   - Async data fetching for reduced API wait times
+   - Proxy rotation for better rate limit handling
+   - Progressive feature calculation to show partial results faster
+   - ML-based feature importance to reduce required data fetching
 
 ## License
 

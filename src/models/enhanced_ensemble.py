@@ -218,7 +218,8 @@ class NBAEnhancedEnsembleModel:
                     reg_lambda=1.2,
                     random_state=53 + window,
                     metric='auc',
-                    verbosity=-1  # Suppress warnings including "No further splits with positive gain"
+                    verbosity=-1,  # Suppress warnings including "No further splits with positive gain"
+                    feature_name='auto'  # Use auto naming instead of assuming column names
                 )
                 
                 # Train LightGBM without early stopping for better compatibility
