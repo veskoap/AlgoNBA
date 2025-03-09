@@ -198,6 +198,27 @@ class NBADataLoader:
         self.cache_max_age_days = cache_max_age_days
         self.include_betting_odds = include_betting_odds
         
+        # Configure NBA API settings for better reliability
+        try:
+            # Update the timeout for all NBA API requests
+            from nba_api import stats
+            import nba_api.stats.library.http as nba_http
+            
+            # Increase timeout for all NBA API requests to 60 seconds
+            nba_http.TIMEOUT = 60
+            
+            # Configure request headers to mimic a browser
+            nba_http.STATS_HEADERS['User-Agent'] = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+            nba_http.STATS_HEADERS['Referer'] = 'https://www.nba.com'
+            nba_http.STATS_HEADERS['Accept-Language'] = 'en-US,en;q=0.9'
+            nba_http.STATS_HEADERS['Accept-Encoding'] = 'gzip, deflate, br'
+            nba_http.STATS_HEADERS['Connection'] = 'keep-alive'
+            nba_http.STATS_HEADERS['Cache-Control'] = 'max-age=0'
+            
+            print("Configured NBA API with extended timeout (60s) and browser-like headers")
+        except Exception as e:
+            print(f"Warning: Could not configure NBA API settings: {str(e)[:100]}")
+        
         # Check if running in Google Colab and handle Drive mounting
         self.is_colab = False
         try:
@@ -248,49 +269,90 @@ class NBADataLoader:
         Returns:
             DataFrame with game data or None if bulk fetch fails
         """
-        try:
-            print(f"Attempting bulk fetch for {len(seasons)} seasons...")
-            # For bulk fetch with multiple seasons, we'll need to fetch more broadly
-            # and then filter to our target seasons
-            
-            # Use a more optimized approach: get all data for recent years, then filter
-            games = leaguegamefinder.LeagueGameFinder(
-                season_type_nullable='Regular Season',
-                league_id_nullable='00'  # NBA league ID
-            ).get_data_frames()[0]
-            
-            # Parse season from date
-            # Function to extract season from game date
-            def get_season(date_str):
-                date = pd.to_datetime(date_str)
-                year = date.year
-                month = date.month
-                # NBA season spans two years, with Oct-Dec being part of the later year's season
-                if month >= 10:  # Oct-Dec
-                    return f"{year}-{str(year+1)[-2:]}"
-                else:  # Jan-June
-                    return f"{year-1}-{str(year)[-2:]}"
-            
-            # Apply the function to get seasons
-            games['SEASON'] = games['GAME_DATE'].apply(get_season)
-            
-            # Filter to only include the requested seasons
-            filtered_games = games[games['SEASON'].isin(seasons)].copy()
-            
-            # Clean up
-            if 'SEASON' in filtered_games.columns:
-                filtered_games.drop('SEASON', axis=1, inplace=True)
-            
-            if len(filtered_games) > 0:
-                print(f"Bulk fetch successful: retrieved {len(filtered_games)} games across requested seasons")
-                return filtered_games
-            else:
-                print("Bulk fetch returned no games for the requested seasons")
-                return None
-            
-        except Exception as e:
-            print(f"Bulk fetch failed: {str(e)}")
-            return None
+        # Maximum number of retry attempts
+        max_retries = 3
+        
+        for attempt in range(1, max_retries + 1):
+            try:
+                print(f"Attempting bulk fetch for {len(seasons)} seasons (attempt {attempt}/{max_retries})...")
+                # For bulk fetch with multiple seasons, we'll need to fetch more broadly
+                # and then filter to our target seasons
+                
+                # Use a more optimized approach: get all data for recent years, then filter
+                games = leaguegamefinder.LeagueGameFinder(
+                    season_type_nullable='Regular Season',
+                    league_id_nullable='00',  # NBA league ID
+                    timeout=90  # Extended timeout for bulk fetch
+                ).get_data_frames()[0]
+                
+                # Parse season from date
+                # Function to extract season from game date
+                def get_season(date_str):
+                    date = pd.to_datetime(date_str)
+                    year = date.year
+                    month = date.month
+                    # NBA season spans two years, with Oct-Dec being part of the later year's season
+                    if month >= 10:  # Oct-Dec
+                        return f"{year}-{str(year+1)[-2:]}"
+                    else:  # Jan-June
+                        return f"{year-1}-{str(year)[-2:]}"
+                
+                # Apply the function to get seasons
+                games['SEASON'] = games['GAME_DATE'].apply(get_season)
+                
+                # Filter to only include the requested seasons
+                filtered_games = games[games['SEASON'].isin(seasons)].copy()
+                
+                # Clean up
+                if 'SEASON' in filtered_games.columns:
+                    filtered_games.drop('SEASON', axis=1, inplace=True)
+                
+                if len(filtered_games) > 0:
+                    print(f"Bulk fetch successful: retrieved {len(filtered_games)} games across requested seasons")
+                    return filtered_games
+                else:
+                    print("Bulk fetch returned no games for the requested seasons")
+                    if attempt < max_retries:
+                        print(f"Retrying (attempt {attempt+1}/{max_retries})...")
+                        time.sleep(2)  # Wait before retrying
+                    else:
+                        return None
+                
+            except Exception as e:
+                print(f"Bulk fetch attempt {attempt} failed: {str(e)}")
+                if attempt < max_retries:
+                    print(f"Retrying with different parameters (attempt {attempt+1}/{max_retries})...")
+                    time.sleep(3)  # Longer wait between retries
+                    
+                    # Try with different parameters on next attempt
+                    try:
+                        # Alternative approach: try with different parameters
+                        print(f"Trying alternative parameters for bulk fetch...")
+                        
+                        # Try with no parameters to get around potential parameter errors
+                        games = leaguegamefinder.LeagueGameFinder().get_data_frames()[0]
+                        
+                        # Parse season from date
+                        games['SEASON'] = games['GAME_DATE'].apply(get_season)
+                        
+                        # Filter to only include the requested seasons
+                        filtered_games = games[games['SEASON'].isin(seasons)].copy()
+                        
+                        # Clean up
+                        if 'SEASON' in filtered_games.columns:
+                            filtered_games.drop('SEASON', axis=1, inplace=True)
+                        
+                        if len(filtered_games) > 0:
+                            print(f"Alternative bulk fetch successful: retrieved {len(filtered_games)} games")
+                            return filtered_games
+                    except Exception as alt_error:
+                        print(f"Alternative bulk fetch also failed: {str(alt_error)[:100]}")
+                else:
+                    return None
+        
+        # If we get here, all retries failed
+        print("All bulk fetch attempts failed")
+        return None
     
     def fetch_games(self, seasons: List[str]) -> Tuple[pd.DataFrame, Dict]:
         """
@@ -423,37 +485,84 @@ class NBADataLoader:
             has_new_data = True
             print(f"Fetching fresh data for {season}...")
             
-            try:
-                # Basic game data
-                games = leaguegamefinder.LeagueGameFinder(
-                    season_nullable=season,
-                    season_type_nullable='Regular Season'
-                ).get_data_frames()[0]
-                
-                # Advanced metrics
-                metrics = self.fetch_advanced_metrics(season)
-                season_metrics = None
-                if not metrics.empty:
-                    advanced_metrics[season] = metrics
-                    season_metrics = metrics
-                
-                # Cache this season's data
-                if self.use_cache:
-                    season_data = (games, season_metrics)
-                    self.cache_manager.set_cache('games_season', season_cache_params, season_data)
-                    print(f"Cached {len(games)} games for season {season}")
-                
-                all_games.append(games)
-                # Reduced sleep time for faster API calls - 0.25 seconds is usually enough
-                time.sleep(0.25)  # Minimal rate limit respect
+            # Use retry logic for individual season fetch
+            max_retries = 3
+            success = False
             
-            except Exception as e:
-                print(f"Error fetching data for season {season}: {e}")
+            for attempt in range(1, max_retries + 1):
+                try:
+                    print(f"Fetching data for season {season} (attempt {attempt}/{max_retries})...")
+                    
+                    # Basic game data with extended timeout
+                    games = leaguegamefinder.LeagueGameFinder(
+                        season_nullable=season,
+                        season_type_nullable='Regular Season',
+                        timeout=90  # Extended timeout
+                    ).get_data_frames()[0]
+                    
+                    # Advanced metrics
+                    metrics = self.fetch_advanced_metrics(season)
+                    season_metrics = None
+                    if not metrics.empty:
+                        advanced_metrics[season] = metrics
+                        season_metrics = metrics
+                    
+                    # Cache this season's data
+                    if self.use_cache:
+                        season_data = (games, season_metrics)
+                        self.cache_manager.set_cache('games_season', season_cache_params, season_data)
+                        print(f"Cached {len(games)} games for season {season}")
+                    
+                    all_games.append(games)
+                    # Reduced sleep time for faster API calls - 0.5 seconds is usually enough
+                    time.sleep(0.5)  # Slightly longer wait for rate limiting
+                    
+                    success = True
+                    break  # Exit retry loop on success
+                
+                except Exception as e:
+                    print(f"Error fetching data for season {season} (attempt {attempt}): {str(e)}")
+                    
+                    if attempt < max_retries:
+                        print(f"Retrying with different parameters (attempt {attempt+1}/{max_retries})...")
+                        time.sleep(3)  # Wait before retry
+                        
+                        # Try with different parameters on subsequent attempts
+                        try:
+                            print(f"Trying alternative parameters for season {season}...")
+                            # Try with minimal parameters
+                            games = leaguegamefinder.LeagueGameFinder(
+                                season=season
+                            ).get_data_frames()[0]
+                            
+                            # Process and cache as before
+                            metrics = self.fetch_advanced_metrics(season)
+                            season_metrics = None
+                            if not metrics.empty:
+                                advanced_metrics[season] = metrics
+                                season_metrics = metrics
+                            
+                            if self.use_cache:
+                                season_data = (games, season_metrics)
+                                self.cache_manager.set_cache('games_season', season_cache_params, season_data)
+                                print(f"Cached {len(games)} games for season {season} using alternative parameters")
+                            
+                            all_games.append(games)
+                            time.sleep(0.5)
+                            
+                            success = True
+                            break  # Exit retry loop on success
+                        except Exception as alt_e:
+                            print(f"Alternative fetch also failed: {str(alt_e)[:100]}")
+            
+            # If all retries failed, try to use stale cache data
+            if not success:
+                print(f"All fetch attempts failed for season {season}")
                 # Try to use older cached data if available, even if it's stale
                 if self.use_cache:
                     season_cache = self.cache_manager.get_cache('games_season', season_cache_params)
                     if season_cache is not None:
-                        print(f"Using stale cached data for season {season} due to fetch error")
+                        print(f"Using stale cached data for season {season} due to fetch failure")
                         season_games, season_metrics = season_cache
                         all_games.append(season_games)
                         if season_metrics:
