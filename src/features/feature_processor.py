@@ -6,7 +6,7 @@ import numpy as np
 from collections import defaultdict
 from typing import Dict, List, Tuple, Any, Set
 
-from src.utils.helpers import calculate_advanced_stats, calculate_travel_impact, safe_divide
+from src.utils.helpers import calculate_advanced_stats, calculate_travel_impact, safe_divide, fix_dataframe_columns
 from src.utils.constants import DEFAULT_LOOKBACK_WINDOWS, FEATURE_GROUPS, FEATURE_REGISTRY
 
 
@@ -944,6 +944,9 @@ class NBAFeatureProcessor:
         # Ensure proper sorting of features DataFrame
         features = features.sort_values(['GAME_DATE', 'TEAM_ID_HOME', 'TEAM_ID_AWAY'])
         
+        # Fix any problematic DataFrame columns
+        features = fix_dataframe_columns(features)
+        
         # Add stadium-specific home advantage (would ideally be based on historical home win % by arena)
         # For now, use a simplified placeholder that could be replaced with actual data
         home_teams = games['TEAM_ID_HOME'].unique()
@@ -1298,6 +1301,9 @@ class NBAFeatureProcessor:
             import traceback
             traceback.print_exc()
 
+        # Fix any problematic DataFrame columns before merging
+        features = fix_dataframe_columns(features)
+        
         # Sort both DataFrames before merging
         features = features.sort_values(['TEAM_ID_HOME', 'TEAM_ID_AWAY', 'GAME_DATE'])
         h2h_stats = h2h_stats.sort_values(['TEAM_ID_HOME', 'TEAM_ID_AWAY', 'GAME_DATE'])
@@ -1308,7 +1314,8 @@ class NBAFeatureProcessor:
             how='left'
         )
 
-        return features.fillna(0)
+        # Fix any problematic DataFrame columns before returning
+        return fix_dataframe_columns(features.fillna(0))
         
     def calculate_h2h_features(self, games: pd.DataFrame) -> pd.DataFrame:
         """

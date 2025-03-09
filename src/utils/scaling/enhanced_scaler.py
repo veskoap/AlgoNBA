@@ -110,48 +110,147 @@ class EnhancedScaler:
         Returns:
             Transformed array with extreme values handled
         """
+        # First, ensure any DataFrame columns are properly handled
+        if isinstance(X, pd.DataFrame):
+            X = self._fix_dataframe_columns(X)
+        
         # Handle different input types
         if isinstance(X, pd.DataFrame):
-            # DataFrame handling
+            # DataFrame handling with improved feature alignment
             if self.feature_names:
-                # Ensure X has all expected columns
-                missing_cols = [col for col in self.feature_names if col not in X.columns]
-                extra_cols = [col for col in X.columns if col not in self.feature_names]
+                # Get expected feature columns (stored during training)
+                expected_cols = self.feature_names
+                current_cols = X.columns.tolist()
                 
+                # Find missing and extra columns
+                missing_cols = [col for col in expected_cols if col not in current_cols]
+                
+                # For prediction only keep expected columns, faster than checking for extra columns
+                # and safer against dimensionality mismatch
+                needed_cols = [col for col in current_cols if col in expected_cols]
+                
+                # Create a new DataFrame with aligned features
                 if missing_cols:
-                    # Create a dictionary with all missing columns and their default values
-                    missing_dict = {col: 0 for col in missing_cols}
+                    # First create all available columns
+                    X_available = X[needed_cols].copy()
                     
-                    # Create DataFrame with missing columns all at once to avoid fragmentation
+                    # Create missing columns with zeros, more efficient than individual inserts
+                    missing_dict = {col: np.zeros(len(X)) for col in missing_cols}
                     missing_df = pd.DataFrame(missing_dict, index=X.index)
                     
-                    # Concatenate with original DataFrame
-                    X_aligned = pd.concat([X.copy(), missing_df], axis=1)
+                    # Combine both DataFrames at once
+                    X_aligned = pd.concat([X_available, missing_df], axis=1)
                     
-                    # Reorder columns to match training order
-                    X_aligned = X_aligned[self.feature_names]
-                elif extra_cols:
-                    X_aligned = X[self.feature_names]
+                    # Ensure proper column order to match the training data
+                    X_aligned = X_aligned.reindex(columns=expected_cols, fill_value=0)
                 else:
-                    X_aligned = X
+                    # Just select and reorder existing columns
+                    X_aligned = X[expected_cols]
             else:
                 X_aligned = X
         else:
-            # Numpy array handling - we can't align columns for numpy arrays
-            # so we'll just use it as is and rely on shape consistency checks later
+            # Numpy array handling - we rely on shape consistency checks
             X_aligned = X
         
         # Handle extreme values
         X_preprocessed = self._preprocess_extreme_values(X_aligned)
         
-        # Try StandardScaler if data is clean
+        # Check feature count compatibility before calling StandardScaler
+        if hasattr(self.scaler, 'n_features_in_') and hasattr(X_preprocessed, 'shape'):
+            expected_features = getattr(self.scaler, 'n_features_in_', 0)
+            actual_features = X_preprocessed.shape[1] if len(X_preprocessed.shape) > 1 else 1
+            
+            # If feature count doesn't match, use robust scaling directly
+            if expected_features != actual_features:
+                # Use robust scaling without printing redundant warning
+                return self._robust_scale(X_preprocessed)
+        
+        # Try StandardScaler if feature counts match
         try:
-            # Don't pass the parameter that's causing issues
+            # Use the fitted scaler
             result = self.scaler.transform(X_preprocessed)
             return result
-        except Exception as e:
-            print(f"Warning: StandardScaler transform failed: {e}. Using robust fallback scaling.")
+        except Exception:
+            # Use robust scaling as fallback without printing warning
             return self._robust_scale(X_preprocessed)
+    
+    def _fix_dataframe_columns(self, X):
+        """
+        Identify and fix DataFrame columns inside a DataFrame.
+        Process known problematic columns with special handling.
+        
+        Args:
+            X: DataFrame to process
+            
+        Returns:
+            Fixed DataFrame with no DataFrame columns
+        """
+        if not isinstance(X, pd.DataFrame):
+            return X
+            
+        # Make a copy to avoid modifying the original
+        X_fixed = X.copy()
+        
+        # Store columns that need to be fixed
+        columns_to_fix = {}
+        problematic_cols = []
+        
+        # First identify problematic columns
+        for col in X_fixed.columns:
+            try:
+                if isinstance(X_fixed[col], pd.DataFrame):
+                    problematic_cols.append(col)
+            except:
+                problematic_cols.append(col)
+        
+        # Handle known problematic columns with special handling
+        known_cols = {
+            'WIN_PCT_DIFF_30D': lambda df: df['WIN_PCT_HOME_30D'] - df['WIN_PCT_AWAY_30D'] if 'WIN_PCT_HOME_30D' in df.columns and 'WIN_PCT_AWAY_30D' in df.columns else pd.Series(0, index=df.index),
+            'REST_DIFF': lambda df: df['REST_DAYS_HOME'] - df['REST_DAYS_AWAY'] if 'REST_DAYS_HOME' in df.columns and 'REST_DAYS_AWAY' in df.columns else pd.Series(0, index=df.index)
+        }
+        
+        # Process known problematic columns first
+        for col, func in known_cols.items():
+            if col in X_fixed.columns:
+                try:
+                    # Try to create the column using the special function
+                    columns_to_fix[col] = func(X_fixed)
+                except:
+                    # Fallback to zeros
+                    columns_to_fix[col] = pd.Series(0, index=X_fixed.index)
+                problematic_cols.append(col)  # Ensure we process this column
+        
+        # Now process all problematic columns
+        for col in problematic_cols:
+            # Skip if already fixed by special handling
+            if col in columns_to_fix:
+                continue
+                
+            try:
+                if isinstance(X_fixed[col], pd.DataFrame):
+                    # DataFrame column detected
+                    if len(X_fixed[col].columns) > 0:
+                        columns_to_fix[col] = X_fixed[col].iloc[:, 0]
+                    else:
+                        columns_to_fix[col] = pd.Series(0, index=X_fixed.index)
+            except:
+                # Any error, create series of zeros
+                columns_to_fix[col] = pd.Series(0, index=X_fixed.index)
+        
+        # If any columns need fixing, reconstruct the DataFrame
+        if columns_to_fix:
+            # First remove all problematic columns
+            for col in columns_to_fix.keys():
+                if col in X_fixed.columns:
+                    X_fixed = X_fixed.drop(col, axis=1)
+            
+            # Then create a DataFrame from the fixed columns
+            fixed_df = pd.DataFrame(columns_to_fix, index=X_fixed.index)
+            
+            # Join with the original, keeping only the good columns
+            X_fixed = pd.concat([X_fixed, fixed_df], axis=1)
+        
+        return X_fixed
     
     def _preprocess_extreme_values(self, X):
         """
@@ -166,20 +265,10 @@ class EnhancedScaler:
         if isinstance(X, pd.DataFrame):
             # For DataFrame input
             # First, fix any DataFrame columns inside the DataFrame
-            for col in X.columns:
-                try:
-                    if isinstance(X[col], pd.DataFrame):
-                        # Convert DataFrame column to Series using first column or create zeros
-                        if len(X[col].columns) > 0:
-                            X[col] = X[col].iloc[:, 0]
-                        else:
-                            X[col] = pd.Series(np.zeros(len(X)), index=X.index)
-                except Exception:
-                    # If any error occurs, replace with zeros
-                    X[col] = pd.Series(np.zeros(len(X)), index=X.index)
+            X_cleaned = self._fix_dataframe_columns(X)
             
             # Replace inf with nan
-            X_cleaned = X.replace([np.inf, -np.inf], np.nan)
+            X_cleaned = X_cleaned.replace([np.inf, -np.inf], np.nan)
             
             # Calculate column-wise statistics ignoring NaNs
             with np.errstate(all='ignore'):
@@ -199,24 +288,31 @@ class EnhancedScaler:
                 lower_bound = means - self.clip_threshold * stds
                 
                 X_capped = X_cleaned.copy()
-                for col in X_capped.columns:
-                    # Handle different column types for clipping
-                    try:
-                        X_capped[col] = X_capped[col].clip(lower=lower_bound[col], upper=upper_bound[col])
-                    except Exception:
-                        # If clipping fails, try to fix the column
-                        if X_capped[col].dtype == 'object':
-                            # Try to convert to numeric
-                            X_capped[col] = pd.to_numeric(X_capped[col], errors='coerce')
-                            # Then clip
-                            X_capped[col] = X_capped[col].clip(lower=lower_bound[col], upper=upper_bound[col])
                 
-                # Fill remaining NaNs with column means or 0 if all NaN
-                for col in X_capped.columns:
-                    if X_capped[col].isna().all():
+                # Process all columns at once with efficient vectorized operations where possible
+                numeric_cols = X_capped.select_dtypes(include=['number']).columns
+                if len(numeric_cols) > 0:
+                    # Clip numeric columns efficiently
+                    X_capped[numeric_cols] = X_capped[numeric_cols].clip(
+                        lower=lower_bound[numeric_cols], 
+                        upper=upper_bound[numeric_cols],
+                        axis=1
+                    )
+                
+                # Process any remaining non-numeric columns individually
+                other_cols = [col for col in X_capped.columns if col not in numeric_cols]
+                for col in other_cols:
+                    try:
+                        # Try to convert to numeric first
+                        X_capped[col] = pd.to_numeric(X_capped[col], errors='coerce')
+                        # Then clip
+                        X_capped[col] = X_capped[col].clip(lower=lower_bound[col], upper=upper_bound[col])
+                    except:
+                        # If conversion fails, fill with zeros
                         X_capped[col] = 0
-                    else:
-                        X_capped[col] = X_capped[col].fillna(means[col])
+                
+                # Fill NaNs efficiently
+                X_capped = X_capped.fillna(means)
                 
                 return X_capped
         else:

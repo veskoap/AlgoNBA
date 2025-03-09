@@ -26,8 +26,99 @@ def suppress_sklearn_warnings():
                           category=FutureWarning, module='sklearn.*')
     warnings.filterwarnings('ignore', message='.*n_features_in_.*', 
                           category=FutureWarning, module='sklearn.*')
+    warnings.filterwarnings('ignore', message=".*X has feature names.*", 
+                          category=UserWarning, module='sklearn.*')
+    warnings.filterwarnings('ignore', message=".*does not have valid feature names.*", 
+                          category=UserWarning, module='sklearn.*')
+    warnings.filterwarnings('ignore', message=".*transform failed.*", 
+                          category=UserWarning, module='sklearn.*')
+    
+    # Add pandas warnings to suppress
+    warnings.filterwarnings('ignore', message=".*DataFrame is highly fragmented.*", 
+                          category=pd.errors.PerformanceWarning)
     
     # Add more patterns as needed
+
+def fix_dataframe_columns(df):
+    """
+    Utility function to fix DataFrame columns that contain DataFrame objects instead of Series.
+    This is a common source of warnings and errors in the prediction pipeline.
+    
+    Args:
+        df: DataFrame to fix
+        
+    Returns:
+        DataFrame with problematic columns fixed
+    """
+    if not isinstance(df, pd.DataFrame):
+        return df
+        
+    # Make a copy to avoid modifying the original
+    fixed_df = df.copy()
+    
+    # Track problematic columns
+    problematic_cols = []
+    cols_to_fix = {}
+    
+    # Define special handlers for known problematic columns
+    special_handlers = {
+        'WIN_PCT_DIFF_30D': lambda df: df['WIN_PCT_HOME_30D'] - df['WIN_PCT_AWAY_30D'] 
+                             if 'WIN_PCT_HOME_30D' in df.columns and 'WIN_PCT_AWAY_30D' in df.columns 
+                             else pd.Series(0, index=df.index),
+        'REST_DIFF': lambda df: df['REST_DAYS_HOME'] - df['REST_DAYS_AWAY'] 
+                     if 'REST_DAYS_HOME' in df.columns and 'REST_DAYS_AWAY' in df.columns 
+                     else pd.Series(0, index=df.index)
+    }
+    
+    # First identify problematic columns
+    for col in fixed_df.columns:
+        try:
+            col_data = fixed_df[col]
+            if isinstance(col_data, pd.DataFrame):
+                problematic_cols.append(col)
+        except:
+            problematic_cols.append(col)
+    
+    # Process special columns first
+    for col, handler in special_handlers.items():
+        if col in fixed_df.columns:
+            try:
+                cols_to_fix[col] = handler(fixed_df)
+            except:
+                # If special handling fails, create zeros Series
+                cols_to_fix[col] = pd.Series(0, index=fixed_df.index)
+            
+            if col not in problematic_cols:
+                problematic_cols.append(col)
+    
+    # Process remaining problematic columns
+    for col in problematic_cols:
+        if col in cols_to_fix:
+            continue  # Already handled by special handlers
+            
+        try:
+            col_data = fixed_df[col]
+            if isinstance(col_data, pd.DataFrame):
+                if len(col_data.columns) > 0:
+                    cols_to_fix[col] = col_data.iloc[:, 0]
+                else:
+                    cols_to_fix[col] = pd.Series(0, index=fixed_df.index)
+        except:
+            # If any error occurs, create zeros Series
+            cols_to_fix[col] = pd.Series(0, index=fixed_df.index)
+    
+    # Apply all fixes at once
+    if cols_to_fix:
+        # Drop problematic columns
+        for col in cols_to_fix:
+            if col in fixed_df.columns:
+                fixed_df = fixed_df.drop(col, axis=1)
+        
+        # Create DataFrame with all fixed columns and concatenate
+        fixed_cols_df = pd.DataFrame(cols_to_fix, index=fixed_df.index)
+        fixed_df = pd.concat([fixed_df, fixed_cols_df], axis=1)
+    
+    return fixed_df
 
 
 def safe_divide(a, b, fill_value=0, index=None):

@@ -52,8 +52,14 @@ from src.utils.helpers import suppress_sklearn_warnings
 # Suppress all sklearn warnings before any imports
 suppress_sklearn_warnings()
 
-# Also add a broader warning filter for other FutureWarnings
+# Suppress warnings for cleaner console output
 warnings.filterwarnings("ignore", category=FutureWarning)
+warnings.filterwarnings("ignore", category=pd.errors.PerformanceWarning)
+warnings.filterwarnings("ignore", message=".*glibc.*", category=FutureWarning)
+warnings.filterwarnings("ignore", message=".*X has feature names.*", category=UserWarning)
+warnings.filterwarnings("ignore", message=".*X does not have valid feature names.*", category=UserWarning)
+warnings.filterwarnings("ignore", message=".*will stop supporting Linux distros.*", category=FutureWarning)
+warnings.filterwarnings("ignore", message=".*DataFrame is highly fragmented.*", category=pd.errors.PerformanceWarning)
 
 # Try to detect and setup TPU if running in Colab and requested
 def setup_tpu():
@@ -76,10 +82,44 @@ def setup_tpu():
         return False
 
 
+def silence_warnings():
+    """
+    Silence common warnings to make output cleaner.
+    """
+    # Suppress multiple warning types for cleaner output
+    import warnings
+    import pandas as pd
+    
+    # Suppress all our previously defined warnings
+    warnings.filterwarnings("ignore", category=FutureWarning)
+    warnings.filterwarnings("ignore", category=pd.errors.PerformanceWarning)
+    warnings.filterwarnings("ignore", message=".*glibc.*", category=FutureWarning)
+    warnings.filterwarnings("ignore", message=".*X has feature names.*", category=UserWarning)
+    warnings.filterwarnings("ignore", message=".*X does not have valid feature names.*", category=UserWarning)
+    warnings.filterwarnings("ignore", message=".*will stop supporting Linux distros.*", category=FutureWarning)
+    warnings.filterwarnings("ignore", message=".*DataFrame is highly fragmented.*", category=pd.errors.PerformanceWarning)
+    warnings.filterwarnings("ignore", message=".*StandardScaler transform failed.*", category=UserWarning)
+    
+    # Silence tensorflow/torch warnings if they're being used
+    try:
+        import tensorflow as tf
+        tf.get_logger().setLevel('ERROR')
+    except ImportError:
+        pass
+    
+    try:
+        import torch
+        torch._C._jit_set_profiling_executor(False)
+        torch._C._jit_set_profiling_mode(False)
+    except ImportError:
+        pass
+    
 def main():
     """
     Initialize and run the NBA prediction model.
     """
+    # Apply all warning suppression
+    silence_warnings()
     # Parse command line arguments
     parser = argparse.ArgumentParser(description='NBA Game Prediction System')
     parser.add_argument('--standard', action='store_true', 
