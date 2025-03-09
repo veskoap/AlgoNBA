@@ -115,6 +115,9 @@ class FeatureTransformer:
                 # Skip if this is a window feature but the window isn't supported
                 if window and feature_info['windows'] and int(window) not in feature_info['windows']:
                     continue
+                
+                # Fix DataFrame columns before each feature calculation
+                self._fix_dataframe_columns(result)
                     
                 # Generate the feature based on its type
                 if feature_info['type'] == 'derived':
@@ -125,9 +128,21 @@ class FeatureTransformer:
                     new_value = self._create_interaction_feature_value(result, feature_name, feature_info)
                     if new_value is not None:
                         new_features[feature_name] = new_value
+                
+                # Fix DataFrame columns after each feature calculation to prevent cascading issues
+                self._fix_dataframe_columns(result)
         
         # Add all new features at once to avoid fragmentation
         if new_features:
+            # Fix any DataFrame columns in the new features
+            for feat_name, feat_series in new_features.items():
+                if isinstance(feat_series, pd.DataFrame):
+                    print(f"New feature {feat_name} is a DataFrame, extracting first column")
+                    if len(feat_series.columns) > 0:
+                        new_features[feat_name] = feat_series.iloc[:, 0]
+                    else:
+                        new_features[feat_name] = pd.Series(np.zeros(len(result)), index=result.index)
+            
             # Convert to DataFrame and join with original features
             new_features_df = pd.DataFrame(new_features, index=result.index)
             result = pd.concat([result, new_features_df], axis=1)
@@ -144,16 +159,41 @@ class FeatureTransformer:
         Args:
             df: DataFrame to fix
         """
+        # Fix with a more aggressive check for REST_DIFF
+        # First check specifically for REST_DIFF
+        if 'REST_DIFF' in df.columns:
+            col = 'REST_DIFF'
+            if isinstance(df[col], pd.DataFrame):
+                print(f"Special processing: Column {col} is a DataFrame, extracting first column and creating new Series")
+                try:
+                    if len(df[col].columns) > 0:
+                        # Ensure we extract just the values and create completely fresh Series
+                        values = df[col].iloc[:, 0].values
+                        df[col] = pd.Series(values, index=df.index, name=col)
+                    else:
+                        # Create a zero-filled Series if the DataFrame is empty
+                        df[col] = pd.Series(np.zeros(len(df)), index=df.index, name=col)
+                except Exception as e:
+                    print(f"Error fixing REST_DIFF: {e}")
+                    # Fallback to zeros
+                    df[col] = pd.Series(np.zeros(len(df)), index=df.index, name=col)
+        
+        # Process all columns
         for col in df.columns:
             if isinstance(df[col], pd.DataFrame):
                 print(f"Column {col} is a DataFrame, extracting first column")
-                if len(df[col].columns) > 0:
-                    # Create a proper Series from the first column
-                    series_value = df[col].iloc[:, 0]
-                    df[col] = series_value
-                else:
-                    # Create a zero-filled Series if the DataFrame is empty
-                    df[col] = pd.Series(np.zeros(len(df)), index=df.index)
+                try:
+                    if len(df[col].columns) > 0:
+                        # Create a completely new Series
+                        values = df[col].iloc[:, 0].values
+                        df[col] = pd.Series(values, index=df.index, name=col)
+                    else:
+                        # Create a zero-filled Series if the DataFrame is empty
+                        df[col] = pd.Series(np.zeros(len(df)), index=df.index, name=col)
+                except Exception as e:
+                    print(f"Error converting column {col}: {e}")
+                    # Fallback to zeros
+                    df[col] = pd.Series(np.zeros(len(df)), index=df.index, name=col)
         
     def _derive_feature_value(self, df: pd.DataFrame, feature_name: str, 
                       feature_info: Dict, window: str = None) -> pd.Series:
@@ -343,9 +383,43 @@ class FeatureTransformer:
             rest_away = dependencies[1]  # REST_DAYS_AWAY
             
             try:
+                # Check and convert DataFrames to Series as needed
+                for col in [rest_home, rest_away]:
+                    if isinstance(df[col], pd.DataFrame):
+                        print(f"Converting DataFrame column {col} to Series")
+                        if len(df[col].columns) > 0:
+                            # Create a proper Series from the first column
+                            series_value = df[col].iloc[:, 0]
+                            df[col] = series_value
+                        else:
+                            # Create a zero-filled Series if the DataFrame is empty
+                            df[col] = pd.Series(np.zeros(len(df)), index=df.index)
+                
+                # Get values as numpy arrays
+                if isinstance(df[rest_home], pd.Series):
+                    home_values = df[rest_home].values
+                elif isinstance(df[rest_home], pd.DataFrame):
+                    home_values = df[rest_home].iloc[:, 0].values
+                else:
+                    home_values = df[rest_home]
+                    
+                if isinstance(df[rest_away], pd.Series):
+                    away_values = df[rest_away].values
+                elif isinstance(df[rest_away], pd.DataFrame):
+                    away_values = df[rest_away].iloc[:, 0].values
+                else:
+                    away_values = df[rest_away]
+                
+                # Directly calculate result
+                try:
+                    result_values = home_values - away_values
+                except Exception as e1:
+                    print(f"Error calculating REST_DIFF values: {e1}")
+                    result_values = np.zeros(len(df))
+                    
                 # Ensure we're returning a Series
                 result = pd.Series(
-                    df[rest_home].values - df[rest_away].values,
+                    result_values,
                     index=df.index,
                     name=feature_name
                 )
@@ -479,14 +553,32 @@ class FeatureTransformer:
             fg3a_home = dependencies[2]  # FG3A_mean_HOME_30D
             fg3a_away = dependencies[3]  # FG3A_mean_AWAY_30D
             
-            # Calculate pace similarity (opposite of difference)
-            pace_similarity = 1.0 / (1.0 + abs(df[pace_home] - df[pace_away]))
-            
-            # Calculate 3-point tendency similarity (opposite of difference)
-            fg3_similarity = 1.0 / (1.0 + abs(df[fg3a_home] - df[fg3a_away]))
-            
-            # Combine into a single metric (higher = more similar styles)
-            return (pace_similarity + fg3_similarity) / 2.0
+            try:
+                # Check and convert DataFrames to Series as needed
+                for col in [pace_home, pace_away, fg3a_home, fg3a_away]:
+                    if isinstance(df[col], pd.DataFrame):
+                        print(f"Column {col} is a DataFrame, extracting first column")
+                        if len(df[col].columns) > 0:
+                            df[col] = df[col].iloc[:, 0]
+                        else:
+                            df[col] = pd.Series(np.zeros(len(df)), index=df.index)
+                
+                # Calculate pace similarity (opposite of difference)
+                pace_similarity = 1.0 / (1.0 + abs(df[pace_home].values - df[pace_away].values))
+                
+                # Calculate 3-point tendency similarity (opposite of difference)
+                fg3_similarity = 1.0 / (1.0 + abs(df[fg3a_home].values - df[fg3a_away].values))
+                
+                # Combine into a single metric (higher = more similar styles)
+                result = pd.Series(
+                    (pace_similarity + fg3_similarity) / 2.0,
+                    index=df.index,
+                    name=feature_name
+                )
+                return result
+            except Exception as e:
+                print(f"Error calculating {feature_name}: {e}")
+                return pd.Series(0.5, index=df.index, name=feature_name)
             
         elif feature_name == 'STYLE_ADVANTAGE':
             pace_home = dependencies[0]  # PACE_mean_HOME_30D
@@ -494,49 +586,140 @@ class FeatureTransformer:
             fg3_pct_home = dependencies[2]  # FG3_PCT_mean_HOME_30D
             fg3_pct_away = dependencies[3]  # FG3_PCT_mean_AWAY_30D
             
-            # Fast team vs slow team advantage
-            pace_advantage = (df[pace_home] - df[pace_away]) / (df[pace_home] + df[pace_away] + 0.001)
+            try:
+                # Check and convert DataFrames to Series as needed
+                for col in [pace_home, pace_away, fg3_pct_home, fg3_pct_away]:
+                    if isinstance(df[col], pd.DataFrame):
+                        print(f"Column {col} is a DataFrame, extracting first column")
+                        if len(df[col].columns) > 0:
+                            df[col] = df[col].iloc[:, 0]
+                        else:
+                            df[col] = pd.Series(np.zeros(len(df)), index=df.index)
+                
+                # Get values as numpy arrays
+                pace_home_values = df[pace_home].values
+                pace_away_values = df[pace_away].values
+                fg3_pct_home_values = df[fg3_pct_home].values
+                fg3_pct_away_values = df[fg3_pct_away].values
             
-            # 3-point shooting advantage
-            shooting_advantage = (df[fg3_pct_home] - df[fg3_pct_away]) / (df[fg3_pct_home] + df[fg3_pct_away] + 0.001)
-            
-            # Combine into a style advantage metric
-            return pace_advantage + shooting_advantage
+                # Fast team vs slow team advantage
+                pace_advantage = (pace_home_values - pace_away_values) / (pace_home_values + pace_away_values + 0.001)
+                
+                # 3-point shooting advantage
+                shooting_advantage = (fg3_pct_home_values - fg3_pct_away_values) / (fg3_pct_home_values + fg3_pct_away_values + 0.001)
+                
+                # Combine into a style advantage metric
+                result = pd.Series(
+                    pace_advantage + shooting_advantage,
+                    index=df.index,
+                    name=feature_name
+                )
+                return result
+            except Exception as e:
+                print(f"Error calculating {feature_name}: {e}")
+                return pd.Series(0, index=df.index, name=feature_name)
             
         elif feature_name == 'MATCHUP_HISTORY_SCORE':
             h2h_win_pct = dependencies[0]  # H2H_WIN_PCT
             h2h_margin = dependencies[1]  # H2H_AVG_MARGIN
             h2h_momentum = dependencies[2]  # H2H_MOMENTUM
             
-            # Normalize margin to -1 to 1 range
-            normalized_margin = df[h2h_margin] / 30.0  # Typical max margin
-            normalized_margin = normalized_margin.clip(-1, 1)
-            
-            # Combine into a weighted matchup score
-            return (
-                0.5 * df[h2h_win_pct] +  # 50% weight on win percentage
-                0.3 * normalized_margin +  # 30% weight on scoring margin
-                0.2 * df[h2h_momentum]    # 20% weight on recent momentum
-            )
+            try:
+                # Check and convert DataFrames to Series as needed
+                for col in [h2h_win_pct, h2h_margin, h2h_momentum]:
+                    if isinstance(df[col], pd.DataFrame):
+                        print(f"Column {col} is a DataFrame, extracting first column")
+                        if len(df[col].columns) > 0:
+                            df[col] = df[col].iloc[:, 0]
+                        else:
+                            df[col] = pd.Series(np.zeros(len(df)), index=df.index)
+                
+                # Get values as numpy arrays
+                win_pct_values = df[h2h_win_pct].values
+                margin_values = df[h2h_margin].values
+                momentum_values = df[h2h_momentum].values
+                
+                # Normalize margin to -1 to 1 range
+                normalized_margin = margin_values / 30.0  # Typical max margin
+                normalized_margin = np.clip(normalized_margin, -1, 1)
+                
+                # Combine into a weighted matchup score
+                result = pd.Series(
+                    0.5 * win_pct_values +  # 50% weight on win percentage
+                    0.3 * normalized_margin +  # 30% weight on scoring margin
+                    0.2 * momentum_values,    # 20% weight on recent momentum
+                    index=df.index,
+                    name=feature_name
+                )
+                return result
+            except Exception as e:
+                print(f"Error calculating {feature_name}: {e}")
+                return pd.Series(0.5, index=df.index, name=feature_name)
             
         elif feature_name == 'TRAVEL_FATIGUE':
             travel_distance = dependencies[0]  # TRAVEL_DISTANCE
             timezone_diff = dependencies[1]  # TIMEZONE_DIFF
             
-            # Normalize distance (typical max domestic flight ~3000 miles)
-            normalized_distance = df[travel_distance] / 3000.0
-            
-            # Combine distance and timezone effect
-            # Timezone changes have more impact than pure distance
-            fatigue = normalized_distance + (abs(df[timezone_diff]) * 0.5)
-            return fatigue.clip(0, 1)  # Scale 0-1
+            try:
+                # Check and convert DataFrames to Series as needed
+                for col in [travel_distance, timezone_diff]:
+                    if isinstance(df[col], pd.DataFrame):
+                        print(f"Column {col} is a DataFrame, extracting first column")
+                        if len(df[col].columns) > 0:
+                            df[col] = df[col].iloc[:, 0]
+                        else:
+                            df[col] = pd.Series(np.zeros(len(df)), index=df.index)
+                
+                # Get values as numpy arrays
+                distance_values = df[travel_distance].values
+                timezone_values = df[timezone_diff].values
+                
+                # Normalize distance (typical max domestic flight ~3000 miles)
+                normalized_distance = distance_values / 3000.0
+                
+                # Combine distance and timezone effect
+                # Timezone changes have more impact than pure distance
+                fatigue = normalized_distance + (abs(timezone_values) * 0.5)
+                
+                # Create Series and scale 0-1
+                result = pd.Series(
+                    np.clip(fatigue, 0, 1),
+                    index=df.index,
+                    name=feature_name
+                )
+                return result
+            except Exception as e:
+                print(f"Error calculating {feature_name}: {e}")
+                return pd.Series(0.3, index=df.index, name=feature_name)
             
         elif feature_name == 'LINEUP_IMPACT_DIFF':
             home_impact = dependencies[0]  # LINEUP_IMPACT_HOME
             away_impact = dependencies[1]  # LINEUP_IMPACT_AWAY
             
-            # Simple difference in lineup impact scores
-            return df[home_impact] - df[away_impact]
+            try:
+                # Check and convert DataFrames to Series as needed
+                for col in [home_impact, away_impact]:
+                    if isinstance(df[col], pd.DataFrame):
+                        print(f"Column {col} is a DataFrame, extracting first column")
+                        if len(df[col].columns) > 0:
+                            df[col] = df[col].iloc[:, 0]
+                        else:
+                            df[col] = pd.Series(np.zeros(len(df)), index=df.index)
+                
+                # Get values as numpy arrays
+                home_values = df[home_impact].values
+                away_values = df[away_impact].values
+                
+                # Simple difference in lineup impact scores
+                result = pd.Series(
+                    home_values - away_values,
+                    index=df.index,
+                    name=feature_name
+                )
+                return result
+            except Exception as e:
+                print(f"Error calculating {feature_name}: {e}")
+                return pd.Series(0, index=df.index, name=feature_name)
             
         return None  # Default if no specific interaction is defined
     

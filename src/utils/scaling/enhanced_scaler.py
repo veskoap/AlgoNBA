@@ -46,6 +46,8 @@ class EnhancedScaler:
     - Provides fallback mechanisms when standard scaling fails
     - Automatically aligns feature columns for prediction
     - Optimizes memory usage with efficient DataFrame operations
+    - Supports array-like and DataFrame inputs
+    - Ensures compatibility with scikit-learn API expectations
     """
     
     def __init__(self, clip_threshold=5.0):
@@ -76,7 +78,10 @@ class EnhancedScaler:
             Transformed array with extreme values handled
         """
         # Store feature names
-        self.feature_names = X.columns.tolist()
+        if hasattr(X, 'columns'):
+            self.feature_names = X.columns.tolist()
+            # Store feature names as an attribute for scikit-learn compatibility
+            self.feature_names_in_ = np.array(self.feature_names)
         
         # Handle extreme values
         X_preprocessed = self._preprocess_extreme_values(X)
@@ -85,6 +90,11 @@ class EnhancedScaler:
         try:
             # Don't pass the parameter that's causing issues
             result = self.scaler.fit_transform(X_preprocessed)
+            
+            # Store the shape for scikit-learn compatibility
+            if hasattr(result, 'shape'):
+                self.n_features_in_ = result.shape[1]
+                
             return result
         except Exception as e:
             print(f"Warning: StandardScaler failed: {e}. Using robust fallback scaling.")
@@ -142,63 +152,129 @@ class EnhancedScaler:
         Handle extreme values in the data.
         
         Args:
-            X: Input data (DataFrame)
+            X: Input data (DataFrame or numpy array)
             
         Returns:
-            DataFrame with extreme values handled
+            Processed data with extreme values handled
         """
-        # Replace inf with nan first
-        X_cleaned = X.replace([np.inf, -np.inf], np.nan)
-        
-        # Calculate column-wise statistics ignoring NaNs
-        with np.errstate(all='ignore'):
-            means = X_cleaned.mean()
-            stds = X_cleaned.std().replace(0, 1)
+        if isinstance(X, pd.DataFrame):
+            # For DataFrame input
+            # Replace inf with nan first
+            X_cleaned = X.replace([np.inf, -np.inf], np.nan)
             
-            # For columns with all NaNs, set means to 0
-            means = means.fillna(0)
-            stds = stds.fillna(1)
+            # Calculate column-wise statistics ignoring NaNs
+            with np.errstate(all='ignore'):
+                means = X_cleaned.mean()
+                stds = X_cleaned.std().replace(0, 1)
+                
+                # For columns with all NaNs, set means to 0
+                means = means.fillna(0)
+                stds = stds.fillna(1)
+                
+                # Store these for fallback scaling
+                self.feature_means = means
+                self.feature_stds = stds
+                
+                # Cap extreme values
+                upper_bound = means + self.clip_threshold * stds
+                lower_bound = means - self.clip_threshold * stds
+                
+                X_capped = X_cleaned.copy()
+                for col in X_capped.columns:
+                    X_capped[col] = X_capped[col].clip(lower=lower_bound[col], upper=upper_bound[col])
+                
+                # Fill remaining NaNs with column means or 0 if all NaN
+                for col in X_capped.columns:
+                    if X_capped[col].isna().all():
+                        X_capped[col] = 0
+                    else:
+                        X_capped[col] = X_capped[col].fillna(means[col])
+                
+                return X_capped
+        else:
+            # For numpy array input
+            # Replace inf with nan
+            X_cleaned = np.copy(X)
+            X_cleaned[np.isinf(X_cleaned)] = np.nan
             
-            # Store these for fallback scaling
-            self.feature_means = means
-            self.feature_stds = stds
-            
-            # Cap extreme values
-            upper_bound = means + self.clip_threshold * stds
-            lower_bound = means - self.clip_threshold * stds
-            
-            X_capped = X_cleaned.copy()
-            for col in X_capped.columns:
-                X_capped[col] = X_capped[col].clip(lower=lower_bound[col], upper=upper_bound[col])
-            
-            # Fill remaining NaNs with column means or 0 if all NaN
-            for col in X_capped.columns:
-                if X_capped[col].isna().all():
-                    X_capped[col] = 0
-                else:
-                    X_capped[col] = X_capped[col].fillna(means[col])
-            
-            return X_capped
+            # Calculate column-wise statistics
+            with np.errstate(all='ignore'):
+                means = np.nanmean(X_cleaned, axis=0)
+                stds = np.nanstd(X_cleaned, axis=0)
+                
+                # Replace zeros in stds to avoid division by zero
+                stds = np.where(stds == 0, 1.0, stds)
+                
+                # Handle all-NaN columns
+                means = np.nan_to_num(means, nan=0.0)
+                
+                # Store for fallback scaling
+                self.feature_means = means
+                self.feature_stds = stds
+                
+                # Cap extreme values
+                upper_bound = means + self.clip_threshold * stds
+                lower_bound = means - self.clip_threshold * stds
+                
+                # Clip values
+                X_capped = np.clip(X_cleaned, lower_bound, upper_bound)
+                
+                # Fill NaNs with means
+                mask = np.isnan(X_capped)
+                if mask.any():
+                    X_capped[mask] = np.take(means, np.where(mask)[1])
+                
+                return X_capped
     
     def _robust_scale(self, X):
         """
         Manually perform scaling when StandardScaler fails.
         
         Args:
-            X: Input data (DataFrame)
+            X: Input data (DataFrame or numpy array)
             
         Returns:
             Scaled numpy array
         """
-        # Use already calculated means and stds
-        if self.feature_means is None or self.feature_stds is None:
-            self.feature_means = X.mean()
-            self.feature_stds = X.std().replace(0, 1)
+        # Handle both DataFrame and numpy array inputs
+        if isinstance(X, pd.DataFrame):
+            # Use already calculated means and stds for DataFrame
+            if self.feature_means is None or self.feature_stds is None:
+                self.feature_means = X.mean()
+                self.feature_stds = X.std().replace(0, 1)
+            
+            # Perform manual scaling
+            X_scaled = (X - self.feature_means) / self.feature_stds
+            result = X_scaled.values
+        else:
+            # For numpy arrays, calculate mean and std directly
+            if self.feature_means is None or self.feature_stds is None:
+                self.feature_means = np.nanmean(X, axis=0)
+                self.feature_stds = np.nanstd(X, axis=0)
+                # Replace zeros with ones to avoid division by zero
+                self.feature_stds = np.where(self.feature_stds == 0, 1.0, self.feature_stds)
+            
+            # Perform manual scaling
+            X_scaled = (X - self.feature_means) / self.feature_stds
+            result = X_scaled
         
-        # Perform manual scaling
-        X_scaled = (X - self.feature_means) / self.feature_stds
+        # Store shape information for scikit-learn compatibility
+        if hasattr(result, 'shape'):
+            self.n_features_in_ = result.shape[1]
+            
+        return result
         
-        return X_scaled.values
+    def __getitem__(self, key):
+        """
+        Support array-like indexing for scikit-learn compatibility.
+        
+        Args:
+            key: The indexing key (slice, index, etc.)
+            
+        Returns:
+            The selected items
+        """
+        raise ValueError("EnhancedScaler does not support direct indexing. Use transform() to get scaled values.")
 
 
 # Test the scaler
