@@ -1742,6 +1742,11 @@ class NBAFeatureProcessor:
         """
         print("Preparing enhanced feature set with feature transformer...")
         
+        # Ensure data is sorted by date to prevent temporal leakage
+        if 'GAME_DATE' in stats_df.columns:
+            stats_df = stats_df.sort_values('GAME_DATE').copy()
+            print("Data sorted by date to preserve temporal order")
+        
         # Create a dictionary to store all columns
         feature_dict = {'GAME_DATE': stats_df['GAME_DATE']}
         target = stats_df['TARGET']
@@ -1770,6 +1775,13 @@ class NBAFeatureProcessor:
         # Clean up the data
         enhanced_features = enhanced_features.replace([np.inf, -np.inf], np.nan)
         enhanced_features = enhanced_features.fillna(0)
+        
+        # Verify no TARGET leakage in features
+        if 'TARGET' in enhanced_features.columns:
+            print("WARNING: TARGET column found in features - this could cause data leakage!")
+            # Drop the TARGET column from features as a safeguard
+            enhanced_features = enhanced_features.drop(columns=['TARGET'])
+            print("Removed TARGET column from features to prevent data leakage")
         
         # Clip extreme values for numerical columns with error handling
         for col in enhanced_features.columns:

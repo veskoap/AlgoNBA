@@ -717,18 +717,32 @@ class EnhancedDeepModelTrainer:
             tuple: (models_list, scalers_list)
         """
         print("\nTraining enhanced deep neural network model...")
+        
+        # Ensure temporal ordering of data
+        if 'GAME_DATE' in X.columns:
+            X = X.sort_values('GAME_DATE').copy()
+            print("Data sorted by GAME_DATE to ensure proper temporal ordering")
+        else:
+            print("Warning: GAME_DATE not found in dataset. Assuming data is already in temporal order.")
 
         # Extract target variable
         y = X['TARGET']
-        X = X.drop(['TARGET', 'GAME_DATE'], axis=1, errors='ignore')
+        X_features = X.drop(['TARGET'], axis=1, errors='ignore')
+        
+        # Keep GAME_DATE for checking temporal integrity but remove for model training
+        if 'GAME_DATE' in X_features.columns:
+            game_dates = X_features['GAME_DATE'].copy()
+            X_features = X_features.drop(['GAME_DATE'], axis=1, errors='ignore')
+        else:
+            game_dates = None
         
         # Ensure no DataFrame columns exist
-        X = self._ensure_no_dataframe_columns(X)
+        X_features = self._ensure_no_dataframe_columns(X_features)
         
         # Store original feature names for later prediction
-        self.training_features = X.columns.tolist()
+        self.training_features = X_features.columns.tolist()
 
-        print(f"Training deep model with {len(X)} samples and {len(X.columns)} features")
+        print(f"Training deep model with {len(X_features)} samples and {len(X_features.columns)} features")
         print(f"Using device: {self.device}")
         print(f"Architecture: Residual={self.use_residual}, Attention={self.use_attention}, MC Dropout={self.use_mc_dropout}")
 
@@ -736,6 +750,25 @@ class EnhancedDeepModelTrainer:
         scalers = []
         fold_metrics = []
         tscv = TimeSeriesSplit(n_splits=self.n_folds)
+        
+        # Check temporal integrity of TimeSeriesSplit
+        if game_dates is not None:
+            print("Verifying temporal integrity of TimeSeriesSplit folds...")
+            for fold, (train_idx, val_idx) in enumerate(tscv.split(X_features), 1):
+                train_dates = game_dates.iloc[train_idx]
+                val_dates = game_dates.iloc[val_idx]
+                
+                train_max = train_dates.max()
+                val_min = val_dates.min()
+                
+                print(f"Fold {fold}: Train end date: {train_max}, Validation start date: {val_min}")
+                if train_max >= val_min:
+                    print(f"WARNING: Potential temporal overlap in fold {fold}!")
+                else:
+                    print(f"Fold {fold} temporal integrity verified")
+                    
+            # Use X_features instead of X for training to ensure we don't have GAME_DATE column
+            X = X_features
 
         for fold, (train_idx, val_idx) in enumerate(tscv.split(X), 1):
             print(f"\nTraining deep model fold {fold}...")

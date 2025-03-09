@@ -206,6 +206,13 @@ class NBAEnhancedEnsembleModel:
         
         print("Training enhanced model ensemble...")
         
+        # Sort by date first to ensure correct temporal ordering
+        if 'GAME_DATE' in X.columns:
+            X = X.sort_values('GAME_DATE').copy()
+            print("Data sorted by GAME_DATE to ensure proper temporal ordering")
+        else:
+            print("Warning: GAME_DATE not found in dataset. Assuming data is already in temporal order.")
+        
         # Create true holdout test set for final evaluation (20% of data)
         # Keep temporal ordering by not shuffling (last 20% as holdout)
         X_train_val, X_test = train_test_split(X, test_size=0.2, shuffle=False)
@@ -220,6 +227,19 @@ class NBAEnhancedEnsembleModel:
         # Extract target variable from training data
         y = X_train_val['TARGET']
         X = X_train_val.drop(['TARGET', 'GAME_DATE'], axis=1, errors='ignore')
+        
+        # Diagnostic print to verify train/test split integrity
+        print("Data leakage check: Ensuring training and test sets are properly separated...")
+        if 'GAME_DATE' in X_train_val.columns and 'GAME_DATE' in X_test.columns:
+            train_end_date = X_train_val['GAME_DATE'].max()
+            test_start_date = X_test['GAME_DATE'].min()
+            print(f"Training set end date: {train_end_date}, Test set start date: {test_start_date}")
+            if train_end_date >= test_start_date:
+                print("WARNING: Potential temporal overlap between training and test sets!")
+            else:
+                print("Temporal integrity verified: Training data strictly precedes test data")
+        else:
+            print("Cannot verify temporal separation - GAME_DATE not available")
         
         # Create a complete list of all problematic columns that need fixing
         problematic_columns = []

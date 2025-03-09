@@ -68,11 +68,30 @@ class HybridModel:
         
         print("Training hybrid prediction model...")
         
+        # Sort by date first to ensure correct temporal ordering
+        if 'GAME_DATE' in X.columns:
+            X = X.sort_values('GAME_DATE').copy()
+            print("Data sorted by GAME_DATE to ensure proper temporal ordering")
+        else:
+            print("Warning: GAME_DATE not found in dataset. Assuming data is already in temporal order.")
+        
         # Create dedicated holdout set for weight optimization
         # Use temporal split (not random) to maintain time series integrity
         X_train, X_weight_opt = train_test_split(X, test_size=0.15, shuffle=False)
         
         print(f"Training data shape: {X_train.shape}, Weight optimization data shape: {X_weight_opt.shape}")
+        
+        # Verify temporal separation between train and weight optimization sets
+        if 'GAME_DATE' in X_train.columns and 'GAME_DATE' in X_weight_opt.columns:
+            train_end_date = X_train['GAME_DATE'].max()
+            opt_start_date = X_weight_opt['GAME_DATE'].min()
+            print(f"Training set end date: {train_end_date}, Weight optimization start date: {opt_start_date}")
+            if train_end_date >= opt_start_date:
+                print("WARNING: Potential temporal overlap between training and weight optimization sets!")
+            else:
+                print("Temporal integrity verified: Training data strictly precedes weight optimization data")
+        else:
+            print("Cannot verify temporal separation - GAME_DATE not available")
         
         # Train ensemble model on training data only
         print("\n==== Training Enhanced Ensemble Model ====")
