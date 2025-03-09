@@ -91,15 +91,29 @@ class NBAEnhancedEnsembleModel:
     def train(self, X: pd.DataFrame) -> None:
         """
         Train enhanced ensemble of models with optimized hyperparameters for higher accuracy.
+        Uses proper data isolation with a true holdout test set to prevent information leakage.
         
         Args:
             X: DataFrame containing features and target variable
         """
+        from sklearn.model_selection import train_test_split
+        
         print("Training enhanced model ensemble...")
+        
+        # Create true holdout test set for final evaluation (20% of data)
+        # Keep temporal ordering by not shuffling (last 20% as holdout)
+        X_train_val, X_test = train_test_split(X, test_size=0.2, shuffle=False)
+        
+        print(f"Training/validation data shape: {X_train_val.shape}, Holdout test data shape: {X_test.shape}")
+        print("Using proper data isolation with true holdout test set")
+        
+        # Store the test set for later evaluation
+        self.X_test = X_test
+        self.y_test = X_test['TARGET'] if 'TARGET' in X_test.columns else None
 
-        # Extract target variable
-        y = X['TARGET']
-        X = X.drop(['TARGET', 'GAME_DATE'], axis=1, errors='ignore')
+        # Extract target variable from training data
+        y = X_train_val['TARGET']
+        X = X_train_val.drop(['TARGET', 'GAME_DATE'], axis=1, errors='ignore')
         
         # First check for known problematic columns and completely replace them
         if 'WIN_PCT_DIFF_30D' in X.columns:
@@ -597,7 +611,49 @@ class NBAEnhancedEnsembleModel:
         """
         if not self.models:
             raise ValueError("Models not trained yet. Call train first.")
+            
+        # After training is complete, evaluate on true holdout test set
+        if hasattr(self, 'X_test') and hasattr(self, 'y_test') and self.y_test is not None:
+            if getattr(self, '_evaluated_holdout', False) is False:
+                print("\n============ EVALUATING ON TRUE HOLDOUT TEST SET ============")
+                test_preds = self._predict_internal(self.X_test)
+                test_binary = (test_preds > 0.5).astype(int)
+                
+                # Calculate test metrics
+                from sklearn.metrics import accuracy_score, brier_score_loss, roc_auc_score
+                test_acc = accuracy_score(self.y_test, test_binary)
+                test_brier = brier_score_loss(self.y_test, test_preds)
+                test_auc = roc_auc_score(self.y_test, test_preds)
+                
+                print(f"TRUE HOLDOUT METRICS:")
+                print(f"Accuracy: {test_acc:.4f}")
+                print(f"Brier Score: {test_brier:.4f}")
+                print(f"AUC-ROC: {test_auc:.4f}")
+                print("============================================================\n")
+                
+                # Store metrics
+                self.holdout_metrics = {
+                    'accuracy': test_acc,
+                    'brier_score': test_brier,
+                    'auc': test_auc
+                }
+                
+                # Mark as evaluated so we don't repeat this
+                self._evaluated_holdout = True
+                
+        # Call internal prediction method for the actual input data
+        return self._predict_internal(X)
         
+    def _predict_internal(self, X: pd.DataFrame) -> np.ndarray:
+        """
+        Internal prediction method used by predict().
+        
+        Args:
+            X: DataFrame containing features
+            
+        Returns:
+            np.ndarray: Prediction probabilities
+        """
         # Create a backup of original input
         X_original = X.copy()
             

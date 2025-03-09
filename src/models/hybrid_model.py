@@ -63,18 +63,27 @@ class HybridModel:
         Args:
             X: DataFrame containing features and target variable
         """
+        from sklearn.model_selection import train_test_split
+        
         print("Training hybrid prediction model...")
         
-        # Train ensemble model
+        # Create dedicated holdout set for weight optimization
+        # Use temporal split (not random) to maintain time series integrity
+        X_train, X_weight_opt = train_test_split(X, test_size=0.15, shuffle=False)
+        
+        print(f"Training data shape: {X_train.shape}, Weight optimization data shape: {X_weight_opt.shape}")
+        
+        # Train ensemble model on training data only
         print("\n==== Training Enhanced Ensemble Model ====")
-        self.ensemble_model.train(X)
+        self.ensemble_model.train(X_train)
         
-        # Train deep model
+        # Train deep model on training data only
         print("\n==== Training Enhanced Deep Learning Model ====")
-        self.deep_model.train_deep_model(X)
+        self.deep_model.train_deep_model(X_train)
         
-        # Learn optimal combination weights using validation data
-        self._optimize_weights(X)
+        # Learn optimal combination weights using separate weight optimization data
+        print("\n==== Optimizing Model Weights on Separate Validation Data ====")
+        self._optimize_weights(X_weight_opt)
         
         self.is_trained = True
         print("\nHybrid model training complete!")
@@ -84,13 +93,18 @@ class HybridModel:
         Optimize the weighting between models using validation data with advanced metrics
         and adaptive weight search for optimal model integration.
         
+        This method has been improved to use a separate weight optimization dataset that
+        isn't used in model training, preventing data leakage and providing more reliable
+        weight optimization.
+        
         Args:
-            X: DataFrame containing features and target variable
+            X: DataFrame containing features and target variable (separate weight optimization data)
         """
         from sklearn.model_selection import TimeSeriesSplit
         from sklearn.metrics import accuracy_score, brier_score_loss, roc_auc_score
         
         print("\nOptimizing model integration weights with advanced metrics...")
+        print("Using separate data for weight optimization to prevent data leakage")
         
         # Set optimization mode flag on deep model to enable fast prediction path
         if hasattr(self.deep_model, '_in_hybrid_optimization'):
@@ -100,8 +114,22 @@ class HybridModel:
             # Create the flag attribute
             setattr(self.deep_model, '_in_hybrid_optimization', True)
         
-        # Extract target
+        # Extract target from the weight optimization dataset
         y = X['TARGET']
+        
+        # Store individual model performance for evaluation
+        print("\nEvaluating individual model performance on weight optimization data:")
+        ensemble_preds = self.ensemble_model.predict(X)
+        deep_preds = self.deep_model.predict(X)
+        
+        ensemble_binary = (ensemble_preds > 0.5).astype(int)
+        deep_binary = (deep_preds > 0.5).astype(int)
+        
+        ensemble_acc = accuracy_score(y, ensemble_binary)
+        deep_acc = accuracy_score(y, deep_binary)
+        
+        print(f"Ensemble model accuracy: {ensemble_acc:.4f}")
+        print(f"Deep learning model accuracy: {deep_acc:.4f}")
         
         # Initialize time-series cross-validation with temporal validation
         tscv = TimeSeriesSplit(n_splits=min(5, len(X) // 300))  # Adaptive splits based on data size
