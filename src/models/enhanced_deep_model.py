@@ -335,10 +335,11 @@ class EnhancedNBAPredictor(nn.Module):
         print(f"Model architecture: {self.hidden_dims}")
         print(f"Input size: {input_size}")
         # Calculate approximate number of parameters
+        # Ensure calculations match actual dimensions used in forward pass
         params = input_size * self.hidden_dims[0]  # Input layer
         for i in range(len(self.hidden_dims) - 1):
             params += self.hidden_dims[i] * self.hidden_dims[i+1]  # Hidden layers
-        params += self.hidden_dims[-1] * 2  # Output layer
+        params += self.hidden_dims[-1] * 2  # Output layer (binary classification)
         print(f"Approximate parameter count: {params:,}")
             
         # Stem layer - initial feature transformation with higher capacity
@@ -712,12 +713,16 @@ class EnhancedDeepModelTrainer:
 
             # Scale features using enhanced scaler for robustness
             feature_scaler = EnhancedScaler()
+            print(f"Input feature dimensions - X_train: {X_train.shape}, X_val: {X_val.shape}")
             X_train_scaled = feature_scaler.fit_transform(X_train)
             X_val_scaled = feature_scaler.transform(X_val)
             
             # Store feature names in the scaler for easier debugging
             if not hasattr(feature_scaler, 'feature_names_in_'):
                 setattr(feature_scaler, 'feature_names_in_', np.array(X_train.columns))
+                
+            # Store the input feature size to ensure model dimensions match
+            input_feature_size = X_train_scaled.shape[1]
 
             # Create PyTorch datasets and dataloaders for batch processing
             # Create tensors
@@ -788,8 +793,9 @@ class EnhancedDeepModelTrainer:
                 )
             
             # Initialize enhanced model with configurable architecture
+            # Use the scaled data shape to ensure dimensions match
             model = EnhancedNBAPredictor(
-                input_size=X_train.shape[1],
+                input_size=input_feature_size,  # Use the actual scaled feature dimension
                 use_residual=self.use_residual,
                 use_attention=self.use_attention,
                 use_bottleneck=self.use_bottleneck,
