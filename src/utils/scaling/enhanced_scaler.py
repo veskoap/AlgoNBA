@@ -105,34 +105,40 @@ class EnhancedScaler:
         Transform data with robust handling of outliers.
         
         Args:
-            X: Input data (DataFrame)
+            X: Input data (DataFrame or numpy array)
             
         Returns:
             Transformed array with extreme values handled
         """
-        # Check if X has expected columns
-        if self.feature_names:
-            # Ensure X has all expected columns
-            missing_cols = [col for col in self.feature_names if col not in X.columns]
-            extra_cols = [col for col in X.columns if col not in self.feature_names]
-            
-            if missing_cols:
-                # Create a dictionary with all missing columns and their default values
-                missing_dict = {col: 0 for col in missing_cols}
+        # Handle different input types
+        if isinstance(X, pd.DataFrame):
+            # DataFrame handling
+            if self.feature_names:
+                # Ensure X has all expected columns
+                missing_cols = [col for col in self.feature_names if col not in X.columns]
+                extra_cols = [col for col in X.columns if col not in self.feature_names]
                 
-                # Create DataFrame with missing columns all at once to avoid fragmentation
-                missing_df = pd.DataFrame(missing_dict, index=X.index)
-                
-                # Concatenate with original DataFrame
-                X_aligned = pd.concat([X.copy(), missing_df], axis=1)
-                
-                # Reorder columns to match training order
-                X_aligned = X_aligned[self.feature_names]
-            elif extra_cols:
-                X_aligned = X[self.feature_names]
+                if missing_cols:
+                    # Create a dictionary with all missing columns and their default values
+                    missing_dict = {col: 0 for col in missing_cols}
+                    
+                    # Create DataFrame with missing columns all at once to avoid fragmentation
+                    missing_df = pd.DataFrame(missing_dict, index=X.index)
+                    
+                    # Concatenate with original DataFrame
+                    X_aligned = pd.concat([X.copy(), missing_df], axis=1)
+                    
+                    # Reorder columns to match training order
+                    X_aligned = X_aligned[self.feature_names]
+                elif extra_cols:
+                    X_aligned = X[self.feature_names]
+                else:
+                    X_aligned = X
             else:
                 X_aligned = X
         else:
+            # Numpy array handling - we can't align columns for numpy arrays
+            # so we'll just use it as is and rely on shape consistency checks later
             X_aligned = X
         
         # Handle extreme values

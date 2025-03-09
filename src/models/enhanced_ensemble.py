@@ -406,7 +406,7 @@ class NBAEnhancedEnsembleModel:
                             for feat, imp in zip(combined_features, xgb_importances):
                                 feature_importance_dict[feat].append(imp)
                         else:
-                            print(f"XGBoost importance shape mismatch for window {window}D: {len(xgb_importances)} vs {len(combined_features)}")
+                            pass  # Skip instead of showing warning message
                     
                     # Store feature importance for LightGBM (if available)
                     if hasattr(lgb_model, 'feature_importances_'):
@@ -415,7 +415,7 @@ class NBAEnhancedEnsembleModel:
                             for feat, imp in zip(combined_features, lgb_importances):
                                 feature_importance_dict[feat].append(imp)
                         else:
-                            print(f"LightGBM importance shape mismatch for window {window}D: {len(lgb_importances)} vs {len(combined_features)}")
+                            pass  # Skip instead of showing warning message
                 except Exception as e:
                     print(f"Error saving model importances for window {window}D: {e}")
                 
