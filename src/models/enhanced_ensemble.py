@@ -673,6 +673,12 @@ class NBAEnhancedEnsembleModel:
                 else:
                     print("Warning: Unable to determine original training features. Prediction may be inaccurate.")
         
+        # Store the stable features list from the first fold to ensure consistency
+        if self.models and len(self.models) > 0:
+            _, _, stable_features_first_fold = self.models[0]
+        else:
+            stable_features_first_fold = []
+            
         # Get predictions from each fold's ensemble
         all_fold_preds = []
         
@@ -682,11 +688,14 @@ class NBAEnhancedEnsembleModel:
                 print(f"Processing enhanced ensemble model predictions...")
             
             try:
+                # Always use the same set of stable features from the first fold to ensure consistency
+                stable_features_to_use = stable_features_first_fold if stable_features_first_fold else stable_features
+                
                 # Create a dictionary to collect all features
                 X_aligned_dict = {}
                 
                 # Add each expected feature, with a default of 0 if missing
-                for feature in stable_features:
+                for feature in stable_features_to_use:
                     # If feature exists in input, use it
                     if feature in X.columns:
                         X_aligned_dict[feature] = X[feature].values
@@ -742,6 +751,12 @@ class NBAEnhancedEnsembleModel:
                 
                 # Create DataFrame all at once to avoid fragmentation
                 X_aligned = pd.DataFrame(X_aligned_dict, index=X.index)
+                
+                # Verify we have the expected number of features
+                if len(X_aligned.columns) != len(stable_features_to_use):
+                    print(f"Warning: Feature count mismatch. Expected {len(stable_features_to_use)}, got {len(X_aligned.columns)}.")
+                    if fold_idx == 0:  # Only print for first fold
+                        print(f"This may cause prediction errors. Ensuring all required features are present.")
                 
                 # Scale the aligned features
                 try:

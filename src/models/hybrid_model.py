@@ -20,7 +20,7 @@ class HybridModel:
     def __init__(self, 
                 ensemble_model: Optional[NBAEnhancedEnsembleModel] = None,
                 deep_model: Optional[EnhancedDeepModelTrainer] = None,
-                ensemble_weight: float = 0.6,
+                ensemble_weight: float = 0.3,  # Reduced from 0.6 to favor deep model
                 quick_mode: bool = False):
         """
         Initialize the hybrid model.
@@ -33,8 +33,9 @@ class HybridModel:
             ensemble_weight: Weight given to ensemble model predictions (vs. deep model).
                             Values closer to 1.0 favor the ensemble model, while values
                             closer to 0.0 favor the deep learning model.
-                            Default of 0.6 slightly favors ensemble models as they typically
-                            provide more stable predictions.
+                            Default of 0.3 now favors the deep learning model based on
+                            empirical performance on unseen data, where the deep model showed
+                            superior predictive power.
             quick_mode: Whether to run in quick testing mode. When True:
                        - Uses fewer weights to test in optimization
                        - Performs less thorough model integration
@@ -131,8 +132,12 @@ class HybridModel:
         print(f"Ensemble model accuracy: {ensemble_acc:.4f}")
         print(f"Deep learning model accuracy: {deep_acc:.4f}")
         
+        # Ensure there are enough samples for at least 2 splits
+        n_splits = max(2, min(5, len(X) // 300))  # Minimum of 2, maximum of 5 splits
+        print(f"Using {n_splits} splits for time-series cross-validation")
+        
         # Initialize time-series cross-validation with temporal validation
-        tscv = TimeSeriesSplit(n_splits=min(5, len(X) // 300))  # Adaptive splits based on data size
+        tscv = TimeSeriesSplit(n_splits=n_splits)  # Minimum 2 splits
         
         # Metrics to track
         metrics = {
@@ -404,7 +409,8 @@ class HybridModel:
         # Prepare for adaptive weighting
         hybrid_preds = np.zeros_like(ensemble_preds)
         
-        # Perform dynamic weighting for each prediction
+        # Perform improved dynamic weighting for each prediction, favoring the deep model
+        # based on real-world performance on unseen data
         for i in range(len(ensemble_preds)):
             # 1. Calculate model agreement score
             agreement = 1.0 - abs(ensemble_preds[i] - deep_preds[i])
@@ -414,12 +420,29 @@ class HybridModel:
             # Otherwise, use global weight parameter
             confidence_diff = abs(ensemble_confidence[i] - deep_confidence[i])
             
-            if confidence_diff > 0.2:  # Significant confidence difference
-                # Dynamic weighting - use confidence-based weights
-                conf_sum = ensemble_confidence[i] + deep_confidence[i]
-                ensemble_weight_dynamic = ensemble_confidence[i] / conf_sum if conf_sum > 0 else 0.5
+            # Calculate the dynamic weight based on demonstrated performance
+            # We now favor the deep model by default when using dynamic weighting
+            if deep_confidence[i] > ensemble_confidence[i]:
+                # Deep model is more confident - give it more weight
+                confidence_ratio = deep_confidence[i] / (ensemble_confidence[i] + 1e-10)
+                # Limit the ratio to a reasonable range
+                confidence_ratio = min(confidence_ratio, 3.0)
+                # Calculate deep model weight (higher ratio = more weight to deep model)
+                deep_weight_dynamic = 0.6 + 0.2 * (confidence_ratio - 1) / 2
+                deep_weight_dynamic = min(0.8, deep_weight_dynamic)  # Cap at 80%
+                ensemble_weight_dynamic = 1.0 - deep_weight_dynamic
+            else:
+                # Ensemble model is more confident
+                confidence_ratio = ensemble_confidence[i] / (deep_confidence[i] + 1e-10)
+                # Limit the ratio to a reasonable range
+                confidence_ratio = min(confidence_ratio, 3.0)
+                # Calculate ensemble weight but still favor deep model slightly
+                ensemble_weight_dynamic = 0.4 + 0.2 * (confidence_ratio - 1) / 2
+                ensemble_weight_dynamic = min(0.6, ensemble_weight_dynamic)  # Cap at 60%
                 deep_weight_dynamic = 1.0 - ensemble_weight_dynamic
-                
+            
+            if confidence_diff > 0.2:  # Significant confidence difference
+                # Use the dynamic confidence-based weights
                 hybrid_preds[i] = (
                     ensemble_weight_dynamic * ensemble_preds[i] + 
                     deep_weight_dynamic * deep_preds[i]
