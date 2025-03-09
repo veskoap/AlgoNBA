@@ -947,21 +947,41 @@ class NBAFeatureProcessor:
         # Fix any problematic DataFrame columns
         features = fix_dataframe_columns(features)
         
-        # Add stadium-specific home advantage (would ideally be based on historical home win % by arena)
-        # For now, use a simplified placeholder that could be replaced with actual data
-        home_teams = games['TEAM_ID_HOME'].unique()
+        # Add stadium-specific home advantage based on HISTORICAL data only
+        # Calculate per-team home advantage using only games PRIOR to each game date
+        # to avoid temporal data leakage
         stadium_advantage = {}
         
-        for team_id in home_teams:
-            team_home_games = games[games['TEAM_ID_HOME'] == team_id]
-            if len(team_home_games) > 0:
-                win_pct = (team_home_games['WL_HOME'] == 'W').mean()
-                # Normalize around average home advantage of ~60%
-                stadium_advantage[team_id] = (win_pct - 0.5) / 0.1  # Scale to make 60% → 1.0
+        # First sort games by date to ensure temporal order
+        sorted_games = games.sort_values(game_date_col)
         
-        # Add stadium advantage to features
-        features['STADIUM_HOME_ADVANTAGE'] = features['TEAM_ID_HOME'].map(
-            stadium_advantage).fillna(1.0).clip(-2, 2)  # Clip to reasonable range
+        # For each team, calculate a rolling home win percentage
+        home_teams = sorted_games['TEAM_ID_HOME'].unique()
+        
+        # Initialize empty stadium advantage dictionary with default values
+        stadium_advantage = {team_id: 1.0 for team_id in home_teams}
+        
+        # For each game, update the stadium advantage based only on PRIOR games
+        for idx, row in features.iterrows():
+            current_date = row['GAME_DATE']
+            current_team = row['TEAM_ID_HOME']
+            
+            # Use only historical games for this team up to (but not including) the current game
+            historical_games = sorted_games[
+                (sorted_games[game_date_col] < current_date) & 
+                (sorted_games['TEAM_ID_HOME'] == current_team)
+            ]
+            
+            if len(historical_games) >= 5:  # Require at least 5 games for a meaningful advantage
+                historical_win_pct = (historical_games['WL_HOME'] == 'W').mean()
+                # Normalize around average home advantage of ~60%
+                features.loc[idx, 'STADIUM_HOME_ADVANTAGE'] = (historical_win_pct - 0.5) / 0.1  # Scale to make 60% → 1.0
+            else:
+                # Use league average for new teams or early in the dataset
+                features.loc[idx, 'STADIUM_HOME_ADVANTAGE'] = 1.0
+        
+        # Clip to reasonable range
+        features['STADIUM_HOME_ADVANTAGE'] = features['STADIUM_HOME_ADVANTAGE'].clip(-2, 2)
 
         # Calculate advanced stats for all games
         advanced_stats = games.apply(calculate_advanced_stats, axis=1)
@@ -1187,10 +1207,35 @@ class NBAFeatureProcessor:
                 if not season_avail.empty:
                     print(f"Successfully loaded player data for {season} with {len(season_avail)} records")
                     
+                    # Add temporal filtering to player availability data
+                    # Ensure we have a date column for filtering
+                    if 'GAME_DATE' in season_avail.columns:
+                        season_avail['GAME_DATE'] = pd.to_datetime(season_avail['GAME_DATE'])
+                    elif 'GAME_DATE_HOME' in season_avail.columns:
+                        season_avail['GAME_DATE'] = pd.to_datetime(season_avail['GAME_DATE_HOME'])
+                    elif 'DATE' in season_avail.columns:
+                        season_avail['GAME_DATE'] = pd.to_datetime(season_avail['DATE'])
+                    
+                    # Sort by date to ensure proper temporal ordering
+                    if 'GAME_DATE' in season_avail.columns:
+                        season_avail = season_avail.sort_values('GAME_DATE')
+                        print(f"Player availability data sorted by date to ensure temporal integrity")
+                    
                     if player_avail_data is None:
                         player_avail_data = season_avail
                     else:
                         player_avail_data = pd.concat([player_avail_data, season_avail], ignore_index=True)
+                        
+                # If we have both game data and player data sorted by date, verify temporal integrity
+                if player_avail_data is not None and 'GAME_DATE' in player_avail_data.columns:
+                    if game_date_col in games.columns:
+                        print("Verifying temporal integrity between games and player availability data...")
+                        games_sorted = games.sort_values(game_date_col)
+                        player_avail_sorted = player_avail_data.sort_values('GAME_DATE')
+                        
+                        # For debugging and transparency, print date ranges
+                        print(f"Game dates: {pd.to_datetime(games_sorted[game_date_col]).min()} to {pd.to_datetime(games_sorted[game_date_col]).max()}")
+                        print(f"Player availability dates: {player_avail_sorted['GAME_DATE'].min()} to {player_avail_sorted['GAME_DATE'].max()}")
             
             # If we have player data, merge it with features
             if player_avail_data is not None and not player_avail_data.empty:
@@ -1230,7 +1275,59 @@ class NBAFeatureProcessor:
                             game_id_col = 'GAME_ID'
                     
                     # Merge home player data if we have a valid game ID column
-                    if game_id_col in features.columns:
+                    # Add temporal filtering to ensure we don't use future availability data
+                    if game_id_col in features.columns and 'GAME_DATE' in features.columns:
+                        print("Using temporal filtering for player availability data merge")
+                        
+                        # Process each game individually to ensure proper temporal filtering
+                        for idx, row in features.iterrows():
+                            current_date = pd.to_datetime(row['GAME_DATE'])
+                            current_game_id = row[game_id_col]
+                            current_home_team = row['TEAM_ID_HOME']
+                            current_away_team = row['TEAM_ID_AWAY']
+                            
+                            # Filter home player data for this specific game
+                            # Only use data available up to (and including) the current game date
+                            game_home_data = home_player_data[
+                                (home_player_data['GAME_ID'] == current_game_id) &
+                                (home_player_data['TEAM_ID'] == current_home_team)
+                            ]
+                            
+                            # If date filtering is possible, apply it
+                            if 'GAME_DATE' in home_player_data.columns:
+                                # Only use player data from before or on the current game date
+                                game_home_data = game_home_data[
+                                    pd.to_datetime(game_home_data['GAME_DATE']) <= current_date
+                                ]
+                            
+                            # Filter away player data for this specific game
+                            game_away_data = away_player_data[
+                                (away_player_data['GAME_ID'] == current_game_id) &
+                                (away_player_data['TEAM_ID'] == current_away_team)
+                            ]
+                            
+                            # If date filtering is possible, apply it
+                            if 'GAME_DATE' in away_player_data.columns:
+                                # Only use player data from before or on the current game date
+                                game_away_data = game_away_data[
+                                    pd.to_datetime(game_away_data['GAME_DATE']) <= current_date
+                                ]
+                            
+                            # If we found matching data, update the features for this game
+                            if not game_home_data.empty:
+                                for col in game_home_data.columns:
+                                    if col not in ['GAME_ID', 'TEAM_ID', 'IS_HOME', 'GAME_DATE']:
+                                        features.loc[idx, col] = game_home_data.iloc[0][col]
+                            
+                            if not game_away_data.empty:
+                                for col in game_away_data.columns:
+                                    if col not in ['GAME_ID', 'TEAM_ID', 'IS_HOME', 'GAME_DATE']:
+                                        features.loc[idx, col] = game_away_data.iloc[0][col]
+                                        
+                        print(f"Completed temporal filtering for {len(features)} games")
+                    else:
+                        # Fallback to traditional merge if date filtering isn't possible
+                        print("WARNING: Unable to apply temporal filtering for player data - using traditional merge")
                         features = pd.merge(
                             features,
                             home_player_data,
@@ -1247,8 +1344,7 @@ class NBAFeatureProcessor:
                             right_on=['GAME_ID', 'TEAM_ID'],
                             how='left'
                         )
-                    else:
-                        print("Skipping player data merge due to missing key columns")
+                    # Missing if/else clause was here, but is now part of the temporal filtering block above
                 else:
                     print(f"Skipping player data merge due to missing columns in player data. Found: {home_player_data.columns}")
                 
@@ -1646,17 +1742,19 @@ class NBAFeatureProcessor:
 
                 for team_type in ['HOME', 'AWAY']:
                     # Offensive trends with exponential decay
+                    # Add closed='left' parameter to explicitly exclude current day's data
                     seasonal_trends[f'TREND_SCORE_{team_type}_{window}D'] = (
                         games.groupby('TEAM_ID_' + team_type)['PTS_' + team_type]
-                        .rolling(window, min_periods=max(1, window//5))
+                        .rolling(window, min_periods=max(1, window//5), closed='left')  # Prevent data leakage
                         .apply(lambda x: np.average(x, weights=weights[-len(x):]) if len(x) > 0 else np.nan)
                         .reset_index(0, drop=True)
                     )
 
                     # Win trends with exponential decay (based on PLUS_MINUS as a proxy for dominance)
+                    # Add closed='left' parameter to explicitly exclude current day's data
                     seasonal_trends[f'TREND_WIN_{team_type}_{window}D'] = (
                         games.groupby('TEAM_ID_' + team_type)['PLUS_MINUS_' + team_type]
-                        .rolling(window, min_periods=max(1, window//5))
+                        .rolling(window, min_periods=max(1, window//5), closed='left')  # Prevent data leakage
                         .apply(lambda x: np.average(x, weights=weights[-len(x):]) if len(x) > 0 else np.nan)
                         .reset_index(0, drop=True)
                     )
@@ -1666,20 +1764,42 @@ class NBAFeatureProcessor:
                         # Calculate points per possession for each game
                         ppp = games[f'PTS_{team_type}'] / (games[f'FGA_{team_type}'] - games[f'TOV_{team_type}'] + 0.001)
                         
-                        seasonal_trends[f'TREND_EFF_{team_type}_{window}D'] = (
-                            games.groupby('TEAM_ID_' + team_type).apply(
-                                lambda group: pd.Series(
-                                    [
-                                        np.average(
-                                            ppp.loc[group.index][-window:], 
-                                            weights=weights[-len(ppp.loc[group.index][-window:]):],
-                                        ) if len(ppp.loc[group.index][-window:]) > 0 else np.nan
-                                        for _ in range(len(group))
-                                    ],
-                                    index=group.index
-                                )
-                            )
-                        )
+                        # Fix efficiency trends to ensure proper temporal data handling
+                        # Sort games by date first for each team
+                        team_indices = games.groupby('TEAM_ID_' + team_type).indices
+                        trend_values = {}
+                        
+                        for team_id, indices in team_indices.items():
+                            # Get the team's games and PPP values, sorted by date
+                            team_games = games.loc[indices].sort_values(game_date_col)
+                            team_dates = pd.to_datetime(team_games[game_date_col])
+                            team_ppp = ppp.loc[indices].reset_index(drop=True)
+                            
+                            # Calculate rolling weighted average for each game
+                            for i in range(len(team_games)):
+                                game_idx = team_games.index[i]
+                                current_date = team_dates.iloc[i]
+                                
+                                # Get previous window days' games (not including current game)
+                                window_start_date = current_date - pd.Timedelta(days=window)
+                                prev_game_mask = (team_dates < current_date) & (team_dates >= window_start_date)
+                                
+                                if prev_game_mask.sum() > 0:
+                                    prev_games_idx = np.where(prev_game_mask)[0]
+                                    prev_ppp = team_ppp.iloc[prev_games_idx].values
+                                    
+                                    # Apply weights to previous games
+                                    use_weights = weights[-len(prev_ppp):] if len(prev_ppp) > 0 else np.ones(1)
+                                    use_weights = use_weights / use_weights.sum()  # Normalize
+                                    
+                                    # Calculate weighted average
+                                    trend_values[game_idx] = np.average(prev_ppp, weights=use_weights) if len(prev_ppp) > 0 else np.nan
+                                else:
+                                    trend_values[game_idx] = np.nan
+                        
+                        # Create Series from trend values and add to seasonal_trends
+                        trend_series = pd.Series(trend_values)
+                        seasonal_trends[f'TREND_EFF_{team_type}_{window}D'] = trend_series
 
             # Add season segment indicators
             games['SEASON_SEGMENT'] = pd.cut(
@@ -1687,39 +1807,87 @@ class NBAFeatureProcessor:
                 bins=[0, 41, 82, 123, 164],
                 labels=['Early', 'Mid', 'Late', 'Final']
             )
+            
+            # Fix segment statistics to avoid temporal leakage
+            # Create a dictionary to store segment stats for each game
+            segment_stats_dict = {}
+            
+            # Sort games by date to ensure proper temporal ordering
+            sorted_games = games.sort_values(game_date_col)
+            
+            # Process each game
+            for idx, row in sorted_games.iterrows():
+                current_date = pd.to_datetime(row[game_date_col])
+                current_segment = row['SEASON_SEGMENT']
+                
+                # Calculate segment statistics using ONLY prior games in this segment
+                # to avoid temporal leakage
+                segment_history = sorted_games[
+                    (pd.to_datetime(sorted_games[game_date_col]) < current_date) & 
+                    (sorted_games['SEASON_SEGMENT'] == current_segment)
+                ]
+                
+                # Store this game's segment stats
+                segment_stats_dict[idx] = {}
+                
+                if len(segment_history) >= 5:  # Require at least 5 games for meaningful stats
+                    segment_stats_dict[idx]['PTS_HOME'] = segment_history['PTS_HOME'].mean()
+                    segment_stats_dict[idx]['PTS_AWAY'] = segment_history['PTS_AWAY'].mean()
+                    segment_stats_dict[idx]['PLUS_MINUS_HOME'] = segment_history['PLUS_MINUS_HOME'].mean()
+                    segment_stats_dict[idx]['PLUS_MINUS_AWAY'] = segment_history['PLUS_MINUS_AWAY'].mean()
+                    segment_stats_dict[idx]['FG3_PCT_HOME'] = segment_history['FG3_PCT_HOME'].mean()
+                    segment_stats_dict[idx]['FG3_PCT_AWAY'] = segment_history['FG3_PCT_AWAY'].mean()
+                    segment_stats_dict[idx]['FG_PCT_HOME'] = segment_history['FG_PCT_HOME'].mean()
+                    segment_stats_dict[idx]['FG_PCT_AWAY'] = segment_history['FG_PCT_AWAY'].mean()
+                else:
+                    # Use overall averages for early games in a segment
+                    early_history = sorted_games[pd.to_datetime(sorted_games[game_date_col]) < current_date]
+                    
+                    if len(early_history) > 0:
+                        segment_stats_dict[idx]['PTS_HOME'] = early_history['PTS_HOME'].mean()
+                        segment_stats_dict[idx]['PTS_AWAY'] = early_history['PTS_AWAY'].mean()
+                        segment_stats_dict[idx]['PLUS_MINUS_HOME'] = early_history['PLUS_MINUS_HOME'].mean()
+                        segment_stats_dict[idx]['PLUS_MINUS_AWAY'] = early_history['PLUS_MINUS_AWAY'].mean()
+                        segment_stats_dict[idx]['FG3_PCT_HOME'] = early_history['FG3_PCT_HOME'].mean()
+                        segment_stats_dict[idx]['FG3_PCT_AWAY'] = early_history['FG3_PCT_AWAY'].mean()
+                        segment_stats_dict[idx]['FG_PCT_HOME'] = early_history['FG_PCT_HOME'].mean()
+                        segment_stats_dict[idx]['FG_PCT_AWAY'] = early_history['FG_PCT_AWAY'].mean()
+                    else:
+                        # Default values for very early games
+                        segment_stats_dict[idx]['PTS_HOME'] = 110.0
+                        segment_stats_dict[idx]['PTS_AWAY'] = 105.0
+                        segment_stats_dict[idx]['PLUS_MINUS_HOME'] = 2.0
+                        segment_stats_dict[idx]['PLUS_MINUS_AWAY'] = -2.0
+                        segment_stats_dict[idx]['FG3_PCT_HOME'] = 0.35
+                        segment_stats_dict[idx]['FG3_PCT_AWAY'] = 0.35
+                        segment_stats_dict[idx]['FG_PCT_HOME'] = 0.45
+                        segment_stats_dict[idx]['FG_PCT_AWAY'] = 0.45
+            
+            # Convert segment stats dictionary to DataFrame
+            segment_stats = pd.DataFrame.from_dict(segment_stats_dict, orient='index')
 
-            # Calculate segment-specific statistics
-            segment_stats = games.groupby('SEASON_SEGMENT').agg({
-                'PTS_HOME': 'mean',
-                'PTS_AWAY': 'mean',
-                'PLUS_MINUS_HOME': 'mean',
-                'PLUS_MINUS_AWAY': 'mean',
-                'FG3_PCT_HOME': 'mean',
-                'FG3_PCT_AWAY': 'mean',
-                'FG_PCT_HOME': 'mean',
-                'FG_PCT_AWAY': 'mean'
-            })
-
-            # Add segment adjustments
+            # Add segment adjustments - using per-game segment stats to avoid temporal leakage
             for team_type in ['HOME', 'AWAY']:
-                seasonal_trends[f'SEGMENT_ADJ_{team_type}'] = (
-                    games['SEASON_SEGMENT'].map(
-                        segment_stats[f'PLUS_MINUS_{team_type}']
-                    )
-                )
-                
-                # Add new segment shooting adjustments
-                seasonal_trends[f'SEGMENT_SHOOTING_{team_type}'] = (
-                    games['SEASON_SEGMENT'].map(
-                        segment_stats[f'FG_PCT_{team_type}']
-                    )
-                )
-                
-                seasonal_trends[f'SEGMENT_3PT_{team_type}'] = (
-                    games['SEASON_SEGMENT'].map(
-                        segment_stats[f'FG3_PCT_{team_type}']
-                    )
-                )
+                # For each adjustment type, map the segment statistics properly to each game
+                for stat_type in ['PLUS_MINUS', 'FG_PCT', 'FG3_PCT']:
+                    col_name = f'{stat_type}_{team_type}'
+                    trend_col = f'SEGMENT_{"ADJ" if stat_type == "PLUS_MINUS" else stat_type}_{team_type}'
+                    
+                    # Create the column in seasonal_trends
+                    seasonal_trends[trend_col] = pd.Series(dtype=float, index=games.index)
+                    
+                    # For each game, get its segment statistics from our pre-calculated segment_stats
+                    for idx in games.index:
+                        if idx in segment_stats.index and col_name in segment_stats.columns:
+                            seasonal_trends.loc[idx, trend_col] = segment_stats.loc[idx, col_name]
+                        else:
+                            # Default values if stats not available
+                            if stat_type == 'PLUS_MINUS':
+                                seasonal_trends.loc[idx, trend_col] = 0.0
+                            elif stat_type == 'FG_PCT':
+                                seasonal_trends.loc[idx, trend_col] = 0.45
+                            elif stat_type == 'FG3_PCT':
+                                seasonal_trends.loc[idx, trend_col] = 0.35
 
         except Exception as e:
             print(f"Error calculating seasonal trends: {e}")
@@ -1782,6 +1950,23 @@ class NBAFeatureProcessor:
             # Drop the TARGET column from features as a safeguard
             enhanced_features = enhanced_features.drop(columns=['TARGET'])
             print("Removed TARGET column from features to prevent data leakage")
+            
+        # Check for any other columns that might contain target leakage
+        potential_leakage_columns = [col for col in enhanced_features.columns if any(
+            leak_word in col.upper() for leak_word in 
+            ['TARGET', 'RESULT', 'OUTCOME', 'WINNER', 'WL_', 'HOME_WIN', 'AWAY_WIN']
+        )]
+        
+        if potential_leakage_columns:
+            print(f"WARNING: Found {len(potential_leakage_columns)} columns that might contain target leakage: {potential_leakage_columns}")
+            print("Removing these columns to prevent data leakage!")
+            enhanced_features = enhanced_features.drop(columns=potential_leakage_columns)
+            
+        # Additional check for temporal leakage - ensure no column contains future information
+        if 'GAME_DATE' in enhanced_features.columns:
+            # Sort by date to ensure proper temporal order
+            enhanced_features = enhanced_features.sort_values('GAME_DATE').reset_index(drop=True)
+            print("Features sorted by date to preserve temporal integrity")
         
         # Clip extreme values for numerical columns with error handling
         for col in enhanced_features.columns:

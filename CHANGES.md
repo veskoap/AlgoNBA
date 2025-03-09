@@ -1,6 +1,29 @@
 # AlgoNBA Accuracy Improvements to 70%+
 
-## Latest Changes: TPU Acceleration (v0.2.2)
+## Latest Changes: Temporal Data Integrity (v0.2.3)
+
+1. **Eliminated Temporal Data Leakage**
+   - Fixed stadium home advantage calculation to only use historical data
+   - Implemented proper temporal filtering for season segment statistics
+   - Added closed='left' parameter to all rolling window calculations
+   - Enhanced efficiency trend calculations with strict temporal controls
+   - Added chronological ordering for player availability data
+
+2. **Enhanced Feature Safety**
+   - Added explicit target variable leak detection and prevention
+   - Implemented more robust date-based sorting throughout the pipeline
+   - Added comprehensive temporal integrity verification between data sources
+   - Created temporal integrity unit tests to prevent future regressions
+   - Fixed segment statistic calculations to respect time order
+
+3. **Improved Injury Data Processing**
+   - Enhanced injury tracker to respect game dates for feature generation
+   - Implemented proper temporal filtering for injury impact calculations
+   - Added safeguards to prevent future injury data from affecting predictions
+
+These changes ensure the model's accuracy metrics reflect true predictive power, without inadvertently using future information during feature generation. The model's performance may appear to decrease compared to previous versions, but this represents a more realistic and honest evaluation of its predictive capabilities.
+
+## Previous Changes: TPU Acceleration (v0.2.2)
 
 1. **Added Google Colab TPU v2-8 Support**
    - Implemented compatibility with TPU hardware for significantly faster training

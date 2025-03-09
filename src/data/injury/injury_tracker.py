@@ -617,6 +617,7 @@ class PlayerInjuryTracker:
                                player_impact_scores: Dict[int, Dict]) -> pd.DataFrame:
         """
         Generate comprehensive injury features for games DataFrame.
+        Ensures temporal integrity by only using injury data from or before each game's date.
         
         Args:
             games_df: Games DataFrame with dates and team IDs
@@ -625,13 +626,28 @@ class PlayerInjuryTracker:
         Returns:
             pd.DataFrame: Injury features
         """
-        print("Generating injury features for games...")
+        print("Generating injury features for games with temporal safeguards...")
         
         # Create empty DataFrame to store results
         injury_features = pd.DataFrame(index=games_df.index)
         
-        # Process each game
-        for idx, row in games_df.iterrows():
+        # First, sort games by date to ensure proper temporal processing
+        game_date_col = None
+        if 'GAME_DATE' in games_df.columns:
+            game_date_col = 'GAME_DATE'
+        elif 'GAME_DATE_HOME' in games_df.columns:
+            game_date_col = 'GAME_DATE_HOME'
+        
+        if game_date_col:
+            # Sort games chronologically
+            sorted_games = games_df.sort_values(game_date_col)
+        else:
+            # If no date column, just use original order
+            sorted_games = games_df.copy()
+            print("WARNING: No game date column found for sorting. Temporal integrity may be compromised.")
+        
+        # Process each game in chronological order
+        for idx, row in sorted_games.iterrows():
             try:
                 # Get the date - try both GAME_DATE and GAME_DATE_HOME format
                 if 'GAME_DATE' in row:
@@ -641,6 +657,7 @@ class PlayerInjuryTracker:
                 else:
                     # Use current date as fallback
                     game_date = datetime.now().strftime('%Y-%m-%d')
+                    print(f"WARNING: Using current date for game at index {idx}. Temporal integrity may be compromised.")
                     
                 # Get team IDs
                 home_team = row['TEAM_ID_HOME']
@@ -653,12 +670,15 @@ class PlayerInjuryTracker:
                 home_team = 1610612737  # ATL
                 away_team = 1610612738  # BOS
             
-            # Get injury impact for home team
+            # Verify we only use injury data up to this game's date
+            # We'll pass the game date to calculate_injury_impact to ensure temporal filtering
+            
+            # Get injury impact for home team using only data available on game date
             home_impact = self.calculate_injury_impact(
                 home_team, game_date, player_impact_scores
             )
             
-            # Get injury impact for away team
+            # Get injury impact for away team using only data available on game date
             away_impact = self.calculate_injury_impact(
                 away_team, game_date, player_impact_scores
             )
@@ -688,5 +708,5 @@ class PlayerInjuryTracker:
             injury_features.loc[idx, 'AWAY_MISSING_STARTERS'] = away_impact['missing_starters']
             injury_features.loc[idx, 'MISSING_STARTERS_DIFF'] = home_impact['missing_starters'] - away_impact['missing_starters']
             
-        print(f"Generated {len(injury_features.columns)} injury features for {len(games_df)} games")
+        print(f"Generated {len(injury_features.columns)} injury features for {len(games_df)} games with temporal integrity")
         return injury_features
