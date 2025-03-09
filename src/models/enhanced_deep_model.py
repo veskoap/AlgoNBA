@@ -645,6 +645,33 @@ class EnhancedDeepModelTrainer:
         self.early_stopping_patience = early_stopping_patience
         self.class_weight_adjustment = class_weight_adjustment
         
+    def _ensure_no_dataframe_columns(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Convert any DataFrame columns to Series to avoid PyTorch errors.
+        
+        Args:
+            df: DataFrame to process
+            
+        Returns:
+            Processed DataFrame with no DataFrame columns
+        """
+        # Make a copy to avoid modifying the original
+        result = df.copy()
+        
+        # Check each column
+        for col in result.columns:
+            col_data = result[col]
+            if isinstance(col_data, pd.DataFrame):
+                print(f"Converting DataFrame column {col} to Series for deep model")
+                if len(col_data.columns) > 0:
+                    # Convert to Series using first column
+                    result[col] = col_data.iloc[:, 0]
+                else:
+                    # Create empty Series if no columns
+                    result[col] = pd.Series(0, index=result.index)
+        
+        return result
+        
     def train_deep_model(self, X: pd.DataFrame) -> Tuple[List, List]:
         """
         Train enhanced deep neural network model with advanced architecture.
@@ -660,6 +687,9 @@ class EnhancedDeepModelTrainer:
         # Extract target variable
         y = X['TARGET']
         X = X.drop(['TARGET', 'GAME_DATE'], axis=1, errors='ignore')
+        
+        # Ensure no DataFrame columns exist
+        X = self._ensure_no_dataframe_columns(X)
         
         # Store original feature names for later prediction
         self.training_features = X.columns.tolist()
@@ -1127,6 +1157,9 @@ class EnhancedDeepModelTrainer:
         """
         if not self.models or not self.scalers:
             raise ValueError("Models not trained yet. Call train_deep_model first.")
+            
+        # Ensure no DataFrame columns exist
+        X = self._ensure_no_dataframe_columns(X)
             
         # Optimization: Use prediction cache for identical inputs
         # This greatly speeds up the hybrid model weight optimization

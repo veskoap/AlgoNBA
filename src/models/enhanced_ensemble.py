@@ -50,6 +50,33 @@ class NBAEnhancedEnsembleModel:
         self.meta_model = None
         self.feature_stability = {}
         
+    def _ensure_no_dataframe_columns(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Convert any DataFrame columns to Series to avoid XGBoost errors.
+        
+        Args:
+            df: DataFrame to process
+            
+        Returns:
+            Processed DataFrame with no DataFrame columns
+        """
+        # Make a copy to avoid modifying the original
+        result = df.copy()
+        
+        # Check each column
+        for col in result.columns:
+            col_data = result[col]
+            if isinstance(col_data, pd.DataFrame):
+                print(f"Converting DataFrame column {col} to Series")
+                if len(col_data.columns) > 0:
+                    # Convert to Series using first column
+                    result[col] = col_data.iloc[:, 0]
+                else:
+                    # Create empty Series if no columns
+                    result[col] = pd.Series(0, index=result.index)
+        
+        return result
+        
     def train(self, X: pd.DataFrame) -> None:
         """
         Train enhanced ensemble of models with optimized hyperparameters for higher accuracy.
@@ -62,6 +89,9 @@ class NBAEnhancedEnsembleModel:
         # Extract target variable
         y = X['TARGET']
         X = X.drop(['TARGET', 'GAME_DATE'], axis=1, errors='ignore')
+        
+        # Ensure no DataFrame columns exist
+        X = self._ensure_no_dataframe_columns(X)
         
         # Store the original feature names for later prediction use
         self.training_features = X.columns.tolist()
@@ -95,6 +125,15 @@ class NBAEnhancedEnsembleModel:
                 y_train = y.iloc[train_idx]
 
                 # Initial feature selection with different initializations
+                # Make sure X_train doesn't have DataFrame columns
+                for col in X_train.columns:
+                    if isinstance(X_train[col], pd.DataFrame):
+                        print(f"Converting DataFrame column {col} to Series for feature selection")
+                        if len(X_train[col].columns) > 0:
+                            X_train[col] = X_train[col].iloc[:, 0]
+                        else:
+                            X_train[col] = pd.Series(0, index=X_train.index)
+                            
                 selector = SelectFromModel(
                     xgb.XGBClassifier(
                         n_estimators=300,
@@ -108,9 +147,14 @@ class NBAEnhancedEnsembleModel:
                     threshold='median'  # More strict threshold than default
                 )
 
-                selector.fit(X_train, y_train)
-                selected_features = X.columns[selector.get_support()].tolist()
-                feature_selector_list.append(selected_features)
+                try:
+                    selector.fit(X_train, y_train)
+                    selected_features = X.columns[selector.get_support()].tolist()
+                    feature_selector_list.append(selected_features)
+                except Exception as e:
+                    print(f"Feature selection failed: {e}")
+                    # Use all features as fallback
+                    feature_selector_list.append(list(X.columns))
 
                 for feat in selected_features:
                     # Normalize by total runs (seeds × folds)
@@ -144,8 +188,21 @@ class NBAEnhancedEnsembleModel:
             if not hasattr(scaler, 'feature_names_in_'):
                 setattr(scaler, 'feature_names_in_', np.array(X_train.columns))
 
+            # Make sure X_train and X_val don't have DataFrame columns before applying mask
+            # (though this should be handled by _ensure_no_dataframe_columns earlier)
+            
             # Use stable features
             feature_mask = X.columns.isin(stable_features)
+            # Make sure feature_mask doesn't include any DataFrame columns
+            feature_mask_list = list(feature_mask)
+            for i, (col, include) in enumerate(zip(X.columns, feature_mask)):
+                if include and isinstance(X[col], pd.DataFrame):
+                    print(f"Removing DataFrame column {col} from feature mask")
+                    feature_mask_list[i] = False
+            
+            # Convert feature_mask to numpy array
+            feature_mask = np.array(feature_mask_list)
+            
             X_train_selected = X_train_scaled[:, feature_mask]
             X_val_selected = X_val_scaled[:, feature_mask]
 
@@ -415,6 +472,9 @@ class NBAEnhancedEnsembleModel:
             
         # Drop non-feature columns
         X = X.drop(['TARGET', 'GAME_DATE'], axis=1, errors='ignore')
+        
+        # Ensure no DataFrame columns exist
+        X = self._ensure_no_dataframe_columns(X)
         
         # Ensure we have valid training features
         if not hasattr(self, 'training_features') or not self.training_features:

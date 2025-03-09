@@ -298,6 +298,33 @@ class HybridModel:
         print(f"Metrics at optimal weight: Accuracy={best_metrics['accuracy']:.4f}, "
               f"AUC={best_metrics['auc']:.4f}, Brier Score={best_metrics['brier_score']:.4f}")
         
+    def _ensure_no_dataframe_columns(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Convert any DataFrame columns to Series to avoid errors.
+        
+        Args:
+            df: DataFrame to process
+            
+        Returns:
+            Processed DataFrame with no DataFrame columns
+        """
+        # Make a copy to avoid modifying the original
+        result = df.copy()
+        
+        # Check each column
+        for col in result.columns:
+            col_data = result[col]
+            if isinstance(col_data, pd.DataFrame):
+                print(f"Converting DataFrame column {col} to Series for hybrid model")
+                if len(col_data.columns) > 0:
+                    # Convert to Series using first column
+                    result[col] = col_data.iloc[:, 0]
+                else:
+                    # Create empty Series if no columns
+                    result[col] = pd.Series(0, index=result.index)
+        
+        return result
+        
     def predict(self, X: pd.DataFrame) -> np.ndarray:
         """
         Make predictions using the enhanced hybrid model with dynamic weighting
@@ -311,6 +338,9 @@ class HybridModel:
         """
         if not self.is_trained:
             raise ValueError("Models not trained yet. Call train first.")
+            
+        # Ensure no DataFrame columns exist
+        X = self._ensure_no_dataframe_columns(X)
         
         print("Generating hybrid model predictions...")
         
@@ -435,6 +465,9 @@ class HybridModel:
         """
         if not self.is_trained:
             raise ValueError("Models not trained yet. Call train first.")
+            
+        # Ensure no DataFrame columns exist
+        X = self._ensure_no_dataframe_columns(X)
         
         print("Generating hybrid model predictions with confidence...")
         
