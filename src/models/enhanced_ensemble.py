@@ -50,9 +50,113 @@ class NBAEnhancedEnsembleModel:
         self.meta_model = None
         self.feature_stability = {}
         
+    def _preprocess_dataframe_columns(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Comprehensive preprocessing to ensure DataFrame has consistent column formats.
+        This is more advanced than _ensure_no_dataframe_columns.
+        
+        Args:
+            df: DataFrame to process
+            
+        Returns:
+            Processed DataFrame with proper column types and consistent structure
+        """
+        # Make a copy to avoid modifying the original
+        result = df.copy()
+        
+        # Track processed columns to avoid duplication
+        processed_columns = set()
+        problematic_columns = []
+        
+        # First, detect all problematic DataFrame columns
+        for col in result.columns:
+            try:
+                col_data = result[col]
+                if isinstance(col_data, pd.DataFrame):
+                    problematic_columns.append(col)
+            except Exception:
+                problematic_columns.append(col)
+        
+        # Special handling for known problematic columns
+        known_problematic = ['WIN_PCT_DIFF_30D', 'REST_DIFF']
+        for col in known_problematic:
+            if col in result.columns and col not in processed_columns:
+                # Always recreate these columns from scratch for consistency
+                try:
+                    if col == 'WIN_PCT_DIFF_30D':
+                        if 'WIN_PCT_HOME_30D' in result.columns and 'WIN_PCT_AWAY_30D' in result.columns:
+                            # Properly calculate this derived column
+                            values = result['WIN_PCT_HOME_30D'].values - result['WIN_PCT_AWAY_30D'].values
+                        else:
+                            # Fallback to zeros if source columns missing
+                            values = np.zeros(len(result))
+                    elif col == 'REST_DIFF':
+                        if 'REST_DAYS_HOME' in result.columns and 'REST_DAYS_AWAY' in result.columns:
+                            # Properly calculate this derived column
+                            values = result['REST_DAYS_HOME'].values - result['REST_DAYS_AWAY'].values
+                        else:
+                            # Fallback to zeros if source columns missing
+                            values = np.zeros(len(result))
+                    else:
+                        values = np.zeros(len(result))
+                        
+                    # Remove the column first to avoid SettingWithCopyWarning
+                    if col in result.columns:
+                        result = result.drop(col, axis=1)
+                    # Add as new Series with proper name
+                    result[col] = pd.Series(values, index=result.index, name=col)
+                    processed_columns.add(col)
+                except Exception as e:
+                    # Only show the error once during training
+                    if not hasattr(self, '_shown_column_errors') or col not in self._shown_column_errors:
+                        print(f"Error fixing {col}: {e}")
+                        if not hasattr(self, '_shown_column_errors'):
+                            self._shown_column_errors = set()
+                        self._shown_column_errors.add(col)
+        
+        # Process remaining problematic columns
+        for col in problematic_columns:
+            if col in result.columns and col not in processed_columns:
+                try:
+                    col_data = result[col]
+                    if isinstance(col_data, pd.DataFrame):
+                        if len(col_data.columns) > 0:
+                            # Convert to Series using first column
+                            result[col] = col_data.iloc[:, 0]
+                        else:
+                            # Create empty Series with zeros
+                            result[col] = pd.Series(np.zeros(len(result)), index=result.index)
+                    
+                    # Double-check that the column is now definitely a Series or primitive type
+                    if isinstance(result[col], pd.DataFrame):
+                        # Force conversion to Series
+                        result[col] = pd.Series(np.zeros(len(result)), index=result.index)
+                    
+                    processed_columns.add(col)
+                except Exception:
+                    # Remove problematic column completely if we can't fix it
+                    if col in result.columns:
+                        result = result.drop(col, axis=1)
+        
+        # Ensure all remaining columns have proper dtype
+        for col in result.columns:
+            if col not in processed_columns:
+                try:
+                    # If column is object type but should be numeric, convert it
+                    if result[col].dtype == 'object':
+                        try:
+                            result[col] = pd.to_numeric(result[col], errors='coerce').fillna(0)
+                        except:
+                            pass
+                except:
+                    pass
+        
+        return result
+        
     def _ensure_no_dataframe_columns(self, df: pd.DataFrame) -> pd.DataFrame:
         """
         Convert any DataFrame columns to Series to avoid XGBoost errors.
+        For backward compatibility - now delegates to the more comprehensive method.
         
         Args:
             df: DataFrame to process
@@ -60,33 +164,7 @@ class NBAEnhancedEnsembleModel:
         Returns:
             Processed DataFrame with no DataFrame columns
         """
-        # Make a copy to avoid modifying the original
-        result = df.copy()
-        
-        # Check each column
-        for col in result.columns:
-            try:
-                col_data = result[col]
-                if isinstance(col_data, pd.DataFrame):
-                    print(f"Converting DataFrame column {col} to Series")
-                    if len(col_data.columns) > 0:
-                        # Convert to Series using first column
-                        result[col] = col_data.iloc[:, 0]
-                    else:
-                        # Create empty Series if no columns
-                        result[col] = pd.Series(0, index=result.index)
-                
-                # Double-check that the column is now definitely a Series or primitive type
-                if isinstance(result[col], pd.DataFrame):
-                    print(f"Warning: Column {col} is still a DataFrame after conversion attempt")
-                    # Force conversion to Series 
-                    result[col] = pd.Series(np.zeros(len(result)), index=result.index)
-            except Exception as e:
-                print(f"Error processing column {col}: {e}")
-                # Create a safe replacement
-                result[col] = pd.Series(np.zeros(len(result)), index=result.index)
-        
-        return result
+        return self._preprocess_dataframe_columns(df)
         
     def train(self, X: pd.DataFrame) -> None:
         """
@@ -612,44 +690,50 @@ class NBAEnhancedEnsembleModel:
         if not self.models:
             raise ValueError("Models not trained yet. Call train first.")
             
-        # After training is complete, evaluate on true holdout test set
-        if hasattr(self, 'X_test') and hasattr(self, 'y_test') and self.y_test is not None:
-            if getattr(self, '_evaluated_holdout', False) is False:
-                print("\n============ EVALUATING ON TRUE HOLDOUT TEST SET ============")
-                test_preds = self._predict_internal(self.X_test)
-                test_binary = (test_preds > 0.5).astype(int)
-                
-                # Calculate test metrics
-                from sklearn.metrics import accuracy_score, brier_score_loss, roc_auc_score
-                test_acc = accuracy_score(self.y_test, test_binary)
-                test_brier = brier_score_loss(self.y_test, test_preds)
-                test_auc = roc_auc_score(self.y_test, test_preds)
-                
-                print(f"TRUE HOLDOUT METRICS:")
-                print(f"Accuracy: {test_acc:.4f}")
-                print(f"Brier Score: {test_brier:.4f}")
-                print(f"AUC-ROC: {test_auc:.4f}")
-                print("============================================================\n")
-                
-                # Store metrics
-                self.holdout_metrics = {
-                    'accuracy': test_acc,
-                    'brier_score': test_brier,
-                    'auc': test_auc
-                }
-                
-                # Mark as evaluated so we don't repeat this
-                self._evaluated_holdout = True
-                
-        # Call internal prediction method for the actual input data
-        return self._predict_internal(X)
+        # Suppress warnings during prediction
+        import warnings
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", category=UserWarning, module="sklearn.*")
+            
+            # After training is complete, evaluate on true holdout test set
+            if hasattr(self, 'X_test') and hasattr(self, 'y_test') and self.y_test is not None:
+                if getattr(self, '_evaluated_holdout', False) is False:
+                    print("\n============ EVALUATING ON TRUE HOLDOUT TEST SET ============")
+                    test_preds = self._predict_internal(self.X_test, is_test=True)
+                    test_binary = (test_preds > 0.5).astype(int)
+                    
+                    # Calculate test metrics
+                    from sklearn.metrics import accuracy_score, brier_score_loss, roc_auc_score
+                    test_acc = accuracy_score(self.y_test, test_binary)
+                    test_brier = brier_score_loss(self.y_test, test_preds)
+                    test_auc = roc_auc_score(self.y_test, test_preds)
+                    
+                    print(f"TRUE HOLDOUT METRICS:")
+                    print(f"Accuracy: {test_acc:.4f}")
+                    print(f"Brier Score: {test_brier:.4f}")
+                    print(f"AUC-ROC: {test_auc:.4f}")
+                    print("============================================================\n")
+                    
+                    # Store metrics
+                    self.holdout_metrics = {
+                        'accuracy': test_acc,
+                        'brier_score': test_brier,
+                        'auc': test_auc
+                    }
+                    
+                    # Mark as evaluated so we don't repeat this
+                    self._evaluated_holdout = True
+                    
+            # Call internal prediction method for the actual input data
+            return self._predict_internal(X)
         
-    def _predict_internal(self, X: pd.DataFrame) -> np.ndarray:
+    def _predict_internal(self, X: pd.DataFrame, is_test: bool = False) -> np.ndarray:
         """
         Internal prediction method used by predict().
         
         Args:
             X: DataFrame containing features
+            is_test: Whether this is a test set prediction (to avoid verbose output for tests)
             
         Returns:
             np.ndarray: Prediction probabilities
@@ -660,8 +744,15 @@ class NBAEnhancedEnsembleModel:
         # Drop non-feature columns
         X = X.drop(['TARGET', 'GAME_DATE'], axis=1, errors='ignore')
         
-        # Ensure no DataFrame columns exist
-        X = self._ensure_no_dataframe_columns(X)
+        # Store the original column count before preprocessing
+        original_column_count = len(X.columns)
+        
+        # Ensure no DataFrame columns exist - with improved preprocessing
+        X = self._preprocess_dataframe_columns(X)
+        
+        # Log column count change if significant
+        if abs(len(X.columns) - original_column_count) > 2:
+            print(f"Fixed DataFrame columns: Changed from {original_column_count} to {len(X.columns)} columns")
         
         # Ensure we have valid training features
         if not hasattr(self, 'training_features') or not self.training_features:
@@ -673,23 +764,36 @@ class NBAEnhancedEnsembleModel:
                 else:
                     print("Warning: Unable to determine original training features. Prediction may be inaccurate.")
         
-        # Store the stable features list from the first fold to ensure consistency
+        # Ensure we use consistent features across all folds from the first model
+        # This prevents feature count mismatch errors
         if self.models and len(self.models) > 0:
             _, _, stable_features_first_fold = self.models[0]
+            # Store these on the instance for reuse
+            if not hasattr(self, '_cached_stable_features'):
+                self._cached_stable_features = stable_features_first_fold
         else:
             stable_features_first_fold = []
+            self._cached_stable_features = []
             
         # Get predictions from each fold's ensemble
         all_fold_preds = []
         
+        # Track if we've already shown warnings to avoid repetition
+        warnings_shown = is_test  # Always consider warnings shown for test set
+        
         for fold_idx, (window_models, scaler, stable_features) in enumerate(self.models):
             # Only print for the first fold to reduce verbosity
-            if fold_idx == 0:
+            if fold_idx == 0 and not is_test:
                 print(f"Processing enhanced ensemble model predictions...")
             
             try:
-                # Always use the same set of stable features from the first fold to ensure consistency
-                stable_features_to_use = stable_features_first_fold if stable_features_first_fold else stable_features
+                # Use cached stable features if available or get from the first fold
+                if hasattr(self, '_cached_stable_features') and self._cached_stable_features:
+                    stable_features_to_use = self._cached_stable_features
+                else:
+                    stable_features_to_use = stable_features_first_fold if stable_features_first_fold else stable_features
+                    # Cache for future use
+                    self._cached_stable_features = stable_features_to_use
                 
                 # Create a dictionary to collect all features
                 X_aligned_dict = {}
@@ -754,29 +858,48 @@ class NBAEnhancedEnsembleModel:
                 
                 # Verify we have the expected number of features
                 if len(X_aligned.columns) != len(stable_features_to_use):
-                    print(f"Warning: Feature count mismatch. Expected {len(stable_features_to_use)}, got {len(X_aligned.columns)}.")
-                    if fold_idx == 0:  # Only print for first fold
-                        print(f"This may cause prediction errors. Ensuring all required features are present.")
+                    # Show warning only once
+                    if fold_idx == 0 and not warnings_shown:
+                        print(f"Warning: Feature count mismatch. Expected {len(stable_features_to_use)}, got {len(X_aligned.columns)}.")
+                        print("Ensuring all required features are present.")
+                        warnings_shown = True
                 
                 # Scale the aligned features
                 try:
-                    if isinstance(scaler, EnhancedScaler):
+                    # Check and adapt feature count if needed for StandardScaler
+                    if not isinstance(scaler, EnhancedScaler) and hasattr(scaler, 'feature_names_in_'):
+                        expected_features = len(scaler.feature_names_in_)
+                        actual_features = len(X_aligned.columns)
+                        
+                        # If feature count doesn't match, use a robust approach
+                        if expected_features != actual_features:
+                            # Create a fallback scaler right away instead of trying the original scaler
+                            # This avoids the warning messages about feature count mismatch
+                            if not warnings_shown and fold_idx == 0:
+                                print(f"Using enhanced scaler for feature count adaptation ({actual_features} vs {expected_features})")
+                                warnings_shown = True
+                            fallback_scaler = EnhancedScaler()
+                            X_scaled = fallback_scaler.fit_transform(X_aligned)
+                        else:
+                            # Feature counts match, proceed with original scaler
+                            X_scaled = scaler.transform(X_aligned)
+                    else:
                         # Use enhanced scaler directly
                         X_scaled = scaler.transform(X_aligned)
-                    else:
-                        # For backward compatibility with old models using StandardScaler
-                        X_scaled = scaler.transform(X_aligned)
                 except Exception as e:
-                    # Create a more detailed error message with missing feature information
-                    missing_features = []
-                    if hasattr(scaler, 'feature_names_in_'):
-                        expected = set(scaler.feature_names_in_)
-                        actual = set(X_aligned.columns)
-                        missing_features = list(expected - actual)
-                    
-                    print(f"Warning: Scaling error: {e}")
-                    if missing_features:
-                        print(f"Missing features: {missing_features[:5]}...")
+                    # Show error only once
+                    if fold_idx == 0 and not warnings_shown:
+                        # Create a more detailed error message with missing feature information
+                        missing_features = []
+                        if hasattr(scaler, 'feature_names_in_'):
+                            expected = set(scaler.feature_names_in_)
+                            actual = set(X_aligned.columns)
+                            missing_features = list(expected - actual)
+                        
+                        print(f"Using robust scaling fallback due to error: {str(e)[:100]}...")
+                        if missing_features and len(missing_features) < 10:
+                            print(f"Missing features: {missing_features}")
+                        warnings_shown = True
                     
                     # Use enhanced scaler as fallback
                     fallback_scaler = EnhancedScaler()

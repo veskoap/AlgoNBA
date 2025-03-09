@@ -377,23 +377,28 @@ class HybridModel:
         
         print("Generating hybrid model predictions...")
         
-        # Get predictions from both models
-        ensemble_preds = self.ensemble_model.predict(X)
-        
-        # Get deep model predictions with uncertainty if available
-        try:
-            deep_preds, deep_uncertainties = self.deep_model.predict_with_uncertainty(X)
-            uncertainty_available = True
-        except Exception:
-            deep_preds = self.deep_model.predict(X)
-            uncertainty_available = False
-        
-        # Get confidence scores for both models
-        try:
-            ensemble_confidence = self.ensemble_model.calculate_enhanced_confidence_score(ensemble_preds, X)
-        except Exception:
-            # Fallback if confidence calculation fails
-            ensemble_confidence = np.ones_like(ensemble_preds) * 0.7  # Default to moderate-high confidence
+        # Suppress repeated warning messages during prediction
+        import warnings
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", category=UserWarning, module="sklearn.*")
+            
+            # Get predictions from both models
+            ensemble_preds = self.ensemble_model.predict(X)
+            
+            # Get deep model predictions with uncertainty if available
+            try:
+                deep_preds, deep_uncertainties = self.deep_model.predict_with_uncertainty(X)
+                uncertainty_available = True
+            except Exception:
+                deep_preds = self.deep_model.predict(X)
+                uncertainty_available = False
+            
+            # Get confidence scores for both models
+            try:
+                ensemble_confidence = self.ensemble_model.calculate_enhanced_confidence_score(ensemble_preds, X)
+            except Exception:
+                # Fallback if confidence calculation fails
+                ensemble_confidence = np.ones_like(ensemble_preds) * 0.7  # Default to moderate-high confidence
         
         if uncertainty_available:
             try:
@@ -458,7 +463,13 @@ class HybridModel:
             if agreement > 0.9:
                 # Strong agreement - push prediction further in agreed direction
                 direction = 1 if hybrid_preds[i] > 0.5 else -1
-                hybrid_preds[i] += direction * 0.05 * agreement
+                
+                # Apply a stronger boost when both models have high confidence
+                confidence_boost = 0.05
+                if ensemble_confidence[i] > 0.8 and deep_confidence[i] > 0.8:
+                    confidence_boost = 0.1  # Double the boost for highly confident agreement
+                
+                hybrid_preds[i] += direction * confidence_boost * agreement
         
         # Apply team-specific and feature-based adjustments
         if 'TEAM_ID_HOME' in X.columns and 'TEAM_ID_AWAY' in X.columns:
@@ -522,13 +533,18 @@ class HybridModel:
         
         print("Generating hybrid model predictions with confidence...")
         
-        # Get ensemble model predictions with confidence
-        ensemble_preds = self.ensemble_model.predict(X)
-        ensemble_conf = self.ensemble_model.calculate_enhanced_confidence_score(ensemble_preds, X)
-        
-        # Get deep model predictions with uncertainty
-        deep_preds, uncertainties = self.deep_model.predict_with_uncertainty(X)
-        deep_conf = self.deep_model.calculate_confidence_from_uncertainty(deep_preds, uncertainties)
+        # Suppress repeated warning messages during prediction
+        import warnings
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", category=UserWarning, module="sklearn.*")
+            
+            # Get ensemble model predictions with confidence
+            ensemble_preds = self.ensemble_model.predict(X)
+            ensemble_conf = self.ensemble_model.calculate_enhanced_confidence_score(ensemble_preds, X)
+            
+            # Get deep model predictions with uncertainty
+            deep_preds, uncertainties = self.deep_model.predict_with_uncertainty(X)
+            deep_conf = self.deep_model.calculate_confidence_from_uncertainty(deep_preds, uncertainties)
         
         # Make hybrid predictions using model weights
         hybrid_preds = self.ensemble_weight * ensemble_preds + (1 - self.ensemble_weight) * deep_preds

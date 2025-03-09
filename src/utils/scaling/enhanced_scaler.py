@@ -165,7 +165,20 @@ class EnhancedScaler:
         """
         if isinstance(X, pd.DataFrame):
             # For DataFrame input
-            # Replace inf with nan first
+            # First, fix any DataFrame columns inside the DataFrame
+            for col in X.columns:
+                try:
+                    if isinstance(X[col], pd.DataFrame):
+                        # Convert DataFrame column to Series using first column or create zeros
+                        if len(X[col].columns) > 0:
+                            X[col] = X[col].iloc[:, 0]
+                        else:
+                            X[col] = pd.Series(np.zeros(len(X)), index=X.index)
+                except Exception:
+                    # If any error occurs, replace with zeros
+                    X[col] = pd.Series(np.zeros(len(X)), index=X.index)
+            
+            # Replace inf with nan
             X_cleaned = X.replace([np.inf, -np.inf], np.nan)
             
             # Calculate column-wise statistics ignoring NaNs
@@ -187,7 +200,16 @@ class EnhancedScaler:
                 
                 X_capped = X_cleaned.copy()
                 for col in X_capped.columns:
-                    X_capped[col] = X_capped[col].clip(lower=lower_bound[col], upper=upper_bound[col])
+                    # Handle different column types for clipping
+                    try:
+                        X_capped[col] = X_capped[col].clip(lower=lower_bound[col], upper=upper_bound[col])
+                    except Exception:
+                        # If clipping fails, try to fix the column
+                        if X_capped[col].dtype == 'object':
+                            # Try to convert to numeric
+                            X_capped[col] = pd.to_numeric(X_capped[col], errors='coerce')
+                            # Then clip
+                            X_capped[col] = X_capped[col].clip(lower=lower_bound[col], upper=upper_bound[col])
                 
                 # Fill remaining NaNs with column means or 0 if all NaN
                 for col in X_capped.columns:
