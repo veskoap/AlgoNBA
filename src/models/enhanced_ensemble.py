@@ -53,7 +53,7 @@ class NBAEnhancedEnsembleModel:
     def _preprocess_dataframe_columns(self, df: pd.DataFrame) -> pd.DataFrame:
         """
         Comprehensive preprocessing to ensure DataFrame has consistent column formats.
-        This is more advanced than _ensure_no_dataframe_columns.
+        Optimized to avoid DataFrame fragmentation by consolidating operations.
         
         Args:
             df: DataFrame to process
@@ -62,92 +62,92 @@ class NBAEnhancedEnsembleModel:
             Processed DataFrame with proper column types and consistent structure
         """
         # Make a copy to avoid modifying the original
-        result = df.copy()
+        # We'll create a completely new DataFrame at the end to avoid fragmentation
         
-        # Track processed columns to avoid duplication
-        processed_columns = set()
+        # Identify all problematic columns upfront
         problematic_columns = []
-        
-        # First, detect all problematic DataFrame columns
-        for col in result.columns:
+        df_columns = []
+        for col in df.columns:
             try:
-                col_data = result[col]
+                col_data = df[col]
                 if isinstance(col_data, pd.DataFrame):
+                    df_columns.append(col)
                     problematic_columns.append(col)
             except Exception:
                 problematic_columns.append(col)
+                
+        # Create a data dictionary to build a new DataFrame from scratch
+        data_dict = {}
         
-        # Special handling for known problematic columns
+        # Process known problematic columns first
         known_problematic = ['WIN_PCT_DIFF_30D', 'REST_DIFF']
         for col in known_problematic:
-            if col in result.columns and col not in processed_columns:
-                # Always recreate these columns from scratch for consistency
+            if col in df.columns:
                 try:
                     if col == 'WIN_PCT_DIFF_30D':
-                        if 'WIN_PCT_HOME_30D' in result.columns and 'WIN_PCT_AWAY_30D' in result.columns:
-                            # Properly calculate this derived column
-                            values = result['WIN_PCT_HOME_30D'].values - result['WIN_PCT_AWAY_30D'].values
+                        if 'WIN_PCT_HOME_30D' in df.columns and 'WIN_PCT_AWAY_30D' in df.columns:
+                            # Calculate this derived column
+                            data_dict[col] = df['WIN_PCT_HOME_30D'].values - df['WIN_PCT_AWAY_30D'].values
                         else:
-                            # Fallback to zeros if source columns missing
-                            values = np.zeros(len(result))
+                            # Fallback to zeros
+                            data_dict[col] = np.zeros(len(df))
                     elif col == 'REST_DIFF':
-                        if 'REST_DAYS_HOME' in result.columns and 'REST_DAYS_AWAY' in result.columns:
-                            # Properly calculate this derived column
-                            values = result['REST_DAYS_HOME'].values - result['REST_DAYS_AWAY'].values
+                        if 'REST_DAYS_HOME' in df.columns and 'REST_DAYS_AWAY' in df.columns:
+                            # Calculate this derived column
+                            data_dict[col] = df['REST_DAYS_HOME'].values - df['REST_DAYS_AWAY'].values
                         else:
-                            # Fallback to zeros if source columns missing
-                            values = np.zeros(len(result))
-                    else:
-                        values = np.zeros(len(result))
-                        
-                    # Remove the column first to avoid SettingWithCopyWarning
-                    if col in result.columns:
-                        result = result.drop(col, axis=1)
-                    # Add as new Series with proper name
-                    result[col] = pd.Series(values, index=result.index, name=col)
-                    processed_columns.add(col)
+                            # Fallback to zeros
+                            data_dict[col] = np.zeros(len(df))
                 except Exception as e:
-                    # Only show the error once during training
+                    # Only show the error once
                     if not hasattr(self, '_shown_column_errors') or col not in self._shown_column_errors:
                         print(f"Error fixing {col}: {e}")
                         if not hasattr(self, '_shown_column_errors'):
                             self._shown_column_errors = set()
                         self._shown_column_errors.add(col)
+                    # Use zeros as fallback
+                    data_dict[col] = np.zeros(len(df))
         
-        # Process remaining problematic columns
-        for col in problematic_columns:
-            if col in result.columns and col not in processed_columns:
+        # Process DataFrame columns
+        if df_columns:
+            print(f"Processing {len(df_columns)} DataFrame-type columns")
+            for col in df_columns:
                 try:
-                    col_data = result[col]
-                    if isinstance(col_data, pd.DataFrame):
-                        if len(col_data.columns) > 0:
-                            # Convert to Series using first column
-                            result[col] = col_data.iloc[:, 0]
-                        else:
-                            # Create empty Series with zeros
-                            result[col] = pd.Series(np.zeros(len(result)), index=result.index)
-                    
-                    # Double-check that the column is now definitely a Series or primitive type
-                    if isinstance(result[col], pd.DataFrame):
-                        # Force conversion to Series
-                        result[col] = pd.Series(np.zeros(len(result)), index=result.index)
-                    
-                    processed_columns.add(col)
+                    col_data = df[col]
+                    if isinstance(col_data, pd.DataFrame) and len(col_data.columns) > 0:
+                        # Extract the first column as values
+                        data_dict[col] = col_data.iloc[:, 0].values
+                    else:
+                        # Create zeros as fallback
+                        data_dict[col] = np.zeros(len(df))
                 except Exception:
-                    # Remove problematic column completely if we can't fix it
-                    if col in result.columns:
-                        result = result.drop(col, axis=1)
+                    # Use zeros for any column we can't process
+                    data_dict[col] = np.zeros(len(df))
         
-        # Ensure all remaining columns have proper dtype
-        for col in result.columns:
-            if col not in processed_columns:
+        # Process all non-problematic columns in one batch
+        for col in df.columns:
+            if col not in problematic_columns and col not in known_problematic:
                 try:
-                    # If column is object type but should be numeric, convert it
-                    if result[col].dtype == 'object':
-                        try:
-                            result[col] = pd.to_numeric(result[col], errors='coerce').fillna(0)
-                        except:
-                            pass
+                    # Copy the column values directly
+                    data_dict[col] = df[col].values
+                except Exception:
+                    # Use zeros for any column we can't process
+                    data_dict[col] = np.zeros(len(df))
+        
+        # Create a completely new DataFrame with all columns at once
+        result = pd.DataFrame(data_dict, index=df.index)
+        
+        # Final check for any columns that should be numeric
+        numeric_candidates = []
+        for col in result.columns:
+            if result[col].dtype == 'object':
+                numeric_candidates.append(col)
+                
+        # Convert object columns to numeric all at once
+        if numeric_candidates:
+            for col in numeric_candidates:
+                try:
+                    result[col] = pd.to_numeric(result[col], errors='coerce').fillna(0)
                 except:
                     pass
         
@@ -193,43 +193,85 @@ class NBAEnhancedEnsembleModel:
         y = X_train_val['TARGET']
         X = X_train_val.drop(['TARGET', 'GAME_DATE'], axis=1, errors='ignore')
         
-        # First check for known problematic columns and completely replace them
-        if 'WIN_PCT_DIFF_30D' in X.columns:
-            # Create a brand new Series as a replacement
-            print("Creating completely new WIN_PCT_DIFF_30D Series")
-            # Get the values by direct access if possible, or use zeros as fallback
-            try:
-                if isinstance(X['WIN_PCT_DIFF_30D'], pd.DataFrame) and len(X['WIN_PCT_DIFF_30D'].columns) > 0:
-                    values = X['WIN_PCT_DIFF_30D'].iloc[:, 0].values
-                else:
-                    values = np.zeros(len(X))
-                # Replace the entire column with a new Series
-                X = X.drop('WIN_PCT_DIFF_30D', axis=1)
-                X['WIN_PCT_DIFF_30D'] = pd.Series(values, index=X.index, name='WIN_PCT_DIFF_30D')
-            except Exception as e:
-                print(f"Error fixing WIN_PCT_DIFF_30D: {e}")
-                # Remove the problematic column as a last resort
-                X = X.drop('WIN_PCT_DIFF_30D', axis=1, errors='ignore')
+        # Create a complete list of all problematic columns that need fixing
+        problematic_columns = []
         
-        if 'REST_DIFF' in X.columns:
-            # Create a brand new Series as a replacement
-            print("Creating completely new REST_DIFF Series")
-            # Get the values by direct access if possible, or use zeros as fallback
-            try:
-                if isinstance(X['REST_DIFF'], pd.DataFrame) and len(X['REST_DIFF'].columns) > 0:
-                    values = X['REST_DIFF'].iloc[:, 0].values
-                else:
-                    values = np.zeros(len(X))
-                # Replace the entire column with a new Series
-                X = X.drop('REST_DIFF', axis=1)
-                X['REST_DIFF'] = pd.Series(values, index=X.index, name='REST_DIFF')
-            except Exception as e:
-                print(f"Error fixing REST_DIFF: {e}")
-                # Remove the problematic column as a last resort
-                X = X.drop('REST_DIFF', axis=1, errors='ignore')
+        # Identify known problematic columns
+        known_problematic = ['WIN_PCT_DIFF_30D', 'REST_DIFF']
         
-        # Ensure no DataFrame columns exist
-        X = self._ensure_no_dataframe_columns(X)
+        # Check for DataFrame columns that need fixing
+        for col in X.columns:
+            try:
+                if isinstance(X[col], pd.DataFrame):
+                    problematic_columns.append(col)
+            except Exception:
+                problematic_columns.append(col)
+                
+        # Add known problematic columns to the list
+        for col in known_problematic:
+            if col in X.columns and col not in problematic_columns:
+                problematic_columns.append(col)
+        
+        # If we have problematic columns, create a completely new DataFrame
+        if problematic_columns:
+            print(f"Fixing {len(problematic_columns)} problematic columns all at once")
+            
+            # Create a dictionary to hold all column data
+            data_dict = {}
+            
+            # First process all non-problematic columns
+            for col in X.columns:
+                if col not in problematic_columns:
+                    data_dict[col] = X[col].values
+            
+            # Then process problematic columns
+            for col in problematic_columns:
+                try:
+                    if col == 'WIN_PCT_DIFF_30D':
+                        if 'WIN_PCT_HOME_30D' in X.columns and 'WIN_PCT_AWAY_30D' in X.columns:
+                            # Properly calculate this derived column
+                            data_dict[col] = X['WIN_PCT_HOME_30D'].values - X['WIN_PCT_AWAY_30D'].values
+                        elif isinstance(X[col], pd.DataFrame) and len(X[col].columns) > 0:
+                            # Extract values from the DataFrame column
+                            data_dict[col] = X[col].iloc[:, 0].values
+                        else:
+                            # Fallback to zeros
+                            data_dict[col] = np.zeros(len(X))
+                    elif col == 'REST_DIFF':
+                        if 'REST_DAYS_HOME' in X.columns and 'REST_DAYS_AWAY' in X.columns:
+                            # Properly calculate this derived column
+                            data_dict[col] = X['REST_DAYS_HOME'].values - X['REST_DAYS_AWAY'].values
+                        elif isinstance(X[col], pd.DataFrame) and len(X[col].columns) > 0:
+                            # Extract values from the DataFrame column
+                            data_dict[col] = X[col].iloc[:, 0].values
+                        else:
+                            # Fallback to zeros
+                            data_dict[col] = np.zeros(len(X))
+                    elif isinstance(X[col], pd.DataFrame):
+                        # Process general DataFrame columns
+                        if len(X[col].columns) > 0:
+                            # Extract values from the first column
+                            data_dict[col] = X[col].iloc[:, 0].values
+                        else:
+                            # Create zeros
+                            data_dict[col] = np.zeros(len(X))
+                    else:
+                        # Try direct access for other problematic columns
+                        try:
+                            data_dict[col] = X[col].values
+                        except:
+                            # Fallback to zeros
+                            data_dict[col] = np.zeros(len(X))
+                except Exception as e:
+                    print(f"Error fixing {col}: {e}")
+                    # Use zeros as fallback
+                    data_dict[col] = np.zeros(len(X))
+            
+            # Create a brand new DataFrame with all columns at once
+            X = pd.DataFrame(data_dict, index=X.index)
+        else:
+            # Even if no problematic columns detected, good practice to ensure consistency
+            X = self._ensure_no_dataframe_columns(X)
         
         # Store the original feature names for later prediction use
         self.training_features = X.columns.tolist()
@@ -267,19 +309,29 @@ class NBAEnhancedEnsembleModel:
                 # Create dictionaries to hold column data to prevent fragmentation
                 data_dict = {}
                 
-                # Process each column
+                # Process all columns at once instead of one-by-one
+                # First identify all DataFrame columns
+                df_columns = []
                 for col in X_train.columns:
                     if isinstance(X_train[col], pd.DataFrame):
-                        print(f"Converting DataFrame column {col} to Series for feature selection")
-                        if len(X_train[col].columns) > 0:
-                            # Extract as values
-                            data_dict[col] = X_train[col].iloc[:, 0].values
-                        else:
-                            # Create zeros as fallback
-                            data_dict[col] = np.zeros(len(X_train))
+                        df_columns.append(col)
+                
+                # If there are DataFrame columns, report them
+                if df_columns:
+                    print(f"Converting {len(df_columns)} DataFrame columns to Series for feature selection")
+                
+                # Create data_dict in a more efficient way
+                # Process non-DataFrame columns all at once
+                data_dict = {col: X_train[col].values for col in X_train.columns if not isinstance(X_train[col], pd.DataFrame)}
+                
+                # Process DataFrame columns separately
+                for col in df_columns:
+                    if len(X_train[col].columns) > 0:
+                        # Extract as values from the first column
+                        data_dict[col] = X_train[col].iloc[:, 0].values
                     else:
-                        # Copy non-DataFrame columns as values
-                        data_dict[col] = X_train[col].values
+                        # Create zeros as fallback
+                        data_dict[col] = np.zeros(len(X_train))
                 
                 # Create a new DataFrame all at once to avoid fragmentation
                 X_train = pd.DataFrame(data_dict, index=X_train.index)
@@ -345,17 +397,62 @@ class NBAEnhancedEnsembleModel:
             print(f"\nTraining fold {fold}...")
             
             try:
-                X_train, X_val = X.iloc[train_idx], X.iloc[val_idx]
+                # Get train/val indices
+                train_data = X.iloc[train_idx]
+                val_data = X.iloc[val_idx]
                 y_train, y_val = y.iloc[train_idx], y.iloc[val_idx]
                 
-                # First fix any DataFrame columns in the input data
-                X_train = self._ensure_no_dataframe_columns(X_train)
-                X_val = self._ensure_no_dataframe_columns(X_val)
-
+                # Create clean DataFrames for both train and validation sets at once
+                # This avoids multiple DataFrame fragmentations
+                print(f"Preparing fold {fold} training and validation data...")
+                
+                # Process both train and validation sets in parallel
+                train_dict = {}
+                val_dict = {}
+                
+                # Identify problematic columns in both sets
+                train_problematic = []
+                for col in train_data.columns:
+                    try:
+                        if isinstance(train_data[col], pd.DataFrame):
+                            train_problematic.append(col)
+                    except Exception:
+                        train_problematic.append(col)
+                
+                # Process all columns at once to prevent fragmentation
+                # First, handle all non-problematic columns in train set
+                for col in train_data.columns:
+                    if col not in train_problematic:
+                        train_dict[col] = train_data[col].values
+                
+                # Then handle problematic columns in train set
+                for col in train_problematic:
+                    try:
+                        if isinstance(train_data[col], pd.DataFrame) and len(train_data[col].columns) > 0:
+                            train_dict[col] = train_data[col].iloc[:, 0].values
+                        else:
+                            train_dict[col] = np.zeros(len(train_data))
+                    except Exception:
+                        train_dict[col] = np.zeros(len(train_data))
+                
+                # Create a clean validation set in the same way
+                for col in val_data.columns:
+                    try:
+                        if isinstance(val_data[col], pd.DataFrame) and len(val_data[col].columns) > 0:
+                            val_dict[col] = val_data[col].iloc[:, 0].values
+                        else:
+                            val_dict[col] = val_data[col].values
+                    except Exception:
+                        val_dict[col] = np.zeros(len(val_data))
+                
+                # Create both DataFrames at once to avoid fragmentation
+                X_train = pd.DataFrame(train_dict, index=train_data.index)
+                X_val = pd.DataFrame(val_dict, index=val_data.index)
+                
                 # Scale features using enhanced scaler for robustness
                 scaler = EnhancedScaler()
                 
-                # Convert to numpy arrays first to avoid indexing issues
+                # Convert to numpy arrays to avoid any DataFrame issues
                 X_train_matrix = X_train.values
                 X_val_matrix = X_val.values
                 
@@ -795,63 +892,81 @@ class NBAEnhancedEnsembleModel:
                     # Cache for future use
                     self._cached_stable_features = stable_features_to_use
                 
-                # Create a dictionary to collect all features
-                X_aligned_dict = {}
+                # Collect all features in a single dictionary to avoid fragmentation
+                # First, prepare direct column mappings for existing features
+                existing_features = {feature: X[feature].values for feature in stable_features_to_use if feature in X.columns}
                 
-                # Add each expected feature, with a default of 0 if missing
-                for feature in stable_features_to_use:
-                    # If feature exists in input, use it
-                    if feature in X.columns:
-                        X_aligned_dict[feature] = X[feature].values
-                    else:
-                        # Check if we can derive this feature from others (for certain feature types)
-                        feature_derived = False
+                # Identify missing features that need to be derived or created
+                missing_features = [f for f in stable_features_to_use if f not in X.columns]
+                if missing_features and not is_test:
+                    print(f"Deriving {len(missing_features)} missing features")
+                
+                # Prepare derivation information all at once
+                derived_features = {}
+                default_values = {}
+                
+                # Process all missing features in one batch to minimize DataFrame operations
+                for feature in missing_features:
+                    # Try to get the base feature name without window suffix
+                    base_feature = feature
+                    window = None
+                    if '_D' in feature:
+                        parts = feature.split('_')
+                        for i, part in enumerate(parts):
+                            if part.endswith('D') and part[:-1].isdigit():
+                                base_feature = '_'.join(parts[:i])
+                                window = part[:-1]
+                                break
+                    
+                    # Check if this is a registered feature type we can derive
+                    can_derive = False
+                    if base_feature in FEATURE_REGISTRY:
+                        feature_info = FEATURE_REGISTRY[base_feature]
                         
-                        # Try to get the base feature name without window suffix
-                        base_feature = feature
-                        window = None
-                        if '_D' in feature:
-                            parts = feature.split('_')
-                            for i, part in enumerate(parts):
-                                if part.endswith('D') and part[:-1].isdigit():
-                                    base_feature = '_'.join(parts[:i])
-                                    window = part[:-1]
-                                    break
-                        
-                        # Check if this is a registered feature type we can derive
-                        if base_feature in FEATURE_REGISTRY:
-                            feature_info = FEATURE_REGISTRY[base_feature]
+                        # Only try to derive if it's a derived feature and we have all dependencies
+                        if feature_info['type'] in ['derived', 'interaction'] and 'dependencies' in feature_info:
+                            # Get dependency column names, applying window if needed
+                            dependencies = []
+                            for dep in feature_info['dependencies']:
+                                if window and self._should_apply_window(dep):
+                                    dependencies.append(f"{dep}_{window}D")
+                                else:
+                                    dependencies.append(dep)
                             
-                            # Only try to derive if it's a derived feature and we have all dependencies
-                            if feature_info['type'] in ['derived', 'interaction'] and 'dependencies' in feature_info:
-                                # Get dependency column names, applying window if needed
-                                dependencies = []
-                                for dep in feature_info['dependencies']:
-                                    if window and self._should_apply_window(dep):
-                                        dependencies.append(f"{dep}_{window}D")
-                                    else:
-                                        dependencies.append(dep)
-                                
-                                # Check if all dependencies are available
-                                if all(dep in X.columns for dep in dependencies):
-                                    # Derive the feature based on its type
-                                    if base_feature == 'WIN_PCT_DIFF':
-                                        X_aligned_dict[feature] = X[dependencies[0]] - X[dependencies[1]]
-                                        feature_derived = True
-                                    elif base_feature in ['OFF_RTG_DIFF', 'DEF_RTG_DIFF', 'NET_RTG_DIFF', 'PACE_DIFF']:
-                                        X_aligned_dict[feature] = X[dependencies[0]] - X[dependencies[1]]
-                                        feature_derived = True
-                                    # Add other derivation rules as needed...
-                                
-                                # More derivation cases can be added here
-                        
-                        # If we couldn't derive it, use a default value
-                        if not feature_derived:
-                            # Use 0.5 for probability or percentage features, 0 otherwise
-                            if any(term in feature for term in ['PCT', 'PROBABILITY', 'H2H', 'WIN']):
-                                X_aligned_dict[feature] = np.ones(len(X)) * 0.5
-                            else:
-                                X_aligned_dict[feature] = np.zeros(len(X))
+                            # Check if all dependencies are available
+                            if all(dep in X.columns for dep in dependencies):
+                                # Track the derivation info for later batch processing
+                                if base_feature == 'WIN_PCT_DIFF':
+                                    derived_features[feature] = (dependencies[0], dependencies[1], 'subtract')
+                                    can_derive = True
+                                elif base_feature in ['OFF_RTG_DIFF', 'DEF_RTG_DIFF', 'NET_RTG_DIFF', 'PACE_DIFF']:
+                                    derived_features[feature] = (dependencies[0], dependencies[1], 'subtract')
+                                    can_derive = True
+                                # Add other derivation rules as needed...
+                    
+                    # If we couldn't derive it, prepare default values
+                    if not can_derive:
+                        # Use 0.5 for probability or percentage features, 0 otherwise
+                        if any(term in feature for term in ['PCT', 'PROBABILITY', 'H2H', 'WIN']):
+                            default_values[feature] = 0.5
+                        else:
+                            default_values[feature] = 0.0
+                
+                # Now we'll create all derived features at once
+                derived_values = {}
+                for feature, (col1, col2, op) in derived_features.items():
+                    if op == 'subtract':
+                        derived_values[feature] = X[col1].values - X[col2].values
+                    elif op == 'add':
+                        derived_values[feature] = X[col1].values + X[col2].values
+                    elif op == 'multiply':
+                        derived_values[feature] = X[col1].values * X[col2].values
+                
+                # Create default values arrays all at once
+                default_arrays = {feature: np.full(len(X), value) for feature, value in default_values.items()}
+                
+                # Combine all dictionaries into one
+                X_aligned_dict = {**existing_features, **derived_values, **default_arrays}
                 
                 # Create DataFrame all at once to avoid fragmentation
                 X_aligned = pd.DataFrame(X_aligned_dict, index=X.index)
@@ -1045,6 +1160,10 @@ class NBAEnhancedEnsembleModel:
         confidence_scores = np.zeros(len(predictions))
 
         try:
+            # First ensure features have no DataFrame columns to avoid fragmentation warnings
+            # Only perform the check and fix once, not for every row
+            features_fixed = self._preprocess_dataframe_columns(features)
+            
             # Get confidence weights from constants (or use defaults)
             factors = CONFIDENCE_WEIGHTS.copy()
             
@@ -1065,6 +1184,29 @@ class NBAEnhancedEnsembleModel:
             if len(enhanced_factors) > len(factors):
                 factors = enhanced_factors
 
+            # Pre-check which columns are available to avoid repeated checks
+            available_columns = {
+                'IMPLIED_WIN_PROB': 'IMPLIED_WIN_PROB' in features_fixed.columns,
+                'WIN_count_HOME_60D': 'WIN_count_HOME_60D' in features_fixed.columns,
+                'HOME_CONSISTENCY_30D': 'HOME_CONSISTENCY_30D' in features_fixed.columns,
+                'AWAY_CONSISTENCY_30D': 'AWAY_CONSISTENCY_30D' in features_fixed.columns,
+                'H2H_GAMES': 'H2H_GAMES' in features_fixed.columns,
+                'H2H_RECENCY_WEIGHT': 'H2H_RECENCY_WEIGHT' in features_fixed.columns,
+                'REST_DIFF': 'REST_DIFF' in features_fixed.columns,
+                'PLAYER_IMPACT_DIFF': 'PLAYER_IMPACT_DIFF' in features_fixed.columns,
+                'PLAYER_IMPACT_HOME': 'PLAYER_IMPACT_HOME' in features_fixed.columns,
+                'PLAYER_IMPACT_AWAY': 'PLAYER_IMPACT_AWAY' in features_fixed.columns,
+                'TEAM_ID_HOME': 'TEAM_ID_HOME' in features_fixed.columns,
+                'TEAM_ID_AWAY': 'TEAM_ID_AWAY' in features_fixed.columns
+            }
+            
+            # Create feature stability check once
+            use_feature_stability = hasattr(self, 'feature_importances') and hasattr(self, 'feature_stability')
+            top_features = []
+            if use_feature_stability:
+                top_features = sorted(self.feature_importances.items(), key=lambda x: x[1], reverse=True)[:5]
+            
+            # Calculate confidence for each prediction more efficiently
             for i, pred in enumerate(predictions):
                 score = 0
 
@@ -1075,9 +1217,9 @@ class NBAEnhancedEnsembleModel:
                 score += margin_confidence * factors['prediction_margin']
                 
                 # 1.5 Vegas line agreement if available
-                if 'IMPLIED_WIN_PROB' in features.columns and 'vegas_line' in factors:
+                if available_columns['IMPLIED_WIN_PROB'] and 'vegas_line' in factors:
                     # Calculate agreement between model and betting lines
-                    implied_prob = features.iloc[i]['IMPLIED_WIN_PROB']
+                    implied_prob = features_fixed.iloc[i]['IMPLIED_WIN_PROB']
                     # Agreement is higher when model and vegas agree
                     vegas_agreement = 1.0 - min(abs(pred - implied_prob), 0.5) * 2  # Scale to [0, 1]
                     # Apply sigmoid transformation similar to margin_confidence
@@ -1085,71 +1227,73 @@ class NBAEnhancedEnsembleModel:
                     score += vegas_conf * factors['vegas_line']
 
                 # 2. Sample size confidence
-                if 'WIN_count_HOME_60D' in features.columns:
-                    games_played = features.iloc[i]['WIN_count_HOME_60D']
+                if available_columns['WIN_count_HOME_60D']:
+                    games_played = features_fixed.iloc[i]['WIN_count_HOME_60D']
                     # Sigmoid function to scale sample size confidence
                     sample_size_conf = 2 / (1 + np.exp(-0.1 * games_played)) - 1  # Scale to [0, 1]
                     score += sample_size_conf * factors['sample_size']
                     
                 # 3. Recent consistency confidence
                 consistency_score = 0
-                if 'HOME_CONSISTENCY_30D' in features.columns:
-                    home_consistency = 1 - min(features.iloc[i]['HOME_CONSISTENCY_30D'], 1)  # Lower variance is better
+                if available_columns['HOME_CONSISTENCY_30D']:
+                    home_consistency = 1 - min(features_fixed.iloc[i]['HOME_CONSISTENCY_30D'], 1)  # Lower variance is better
                     consistency_score += home_consistency
                 
-                if 'AWAY_CONSISTENCY_30D' in features.columns:
-                    away_consistency = 1 - min(features.iloc[i]['AWAY_CONSISTENCY_30D'], 1)
+                if available_columns['AWAY_CONSISTENCY_30D']:
+                    away_consistency = 1 - min(features_fixed.iloc[i]['AWAY_CONSISTENCY_30D'], 1)
                     consistency_score += away_consistency
                 
                 if consistency_score > 0:
-                    avg_consistency = consistency_score / 2
+                    avg_consistency = consistency_score / 2 if consistency_score > 1 else consistency_score
                     score += avg_consistency * factors['recent_consistency']
 
                 # 4. Head-to-head confidence
                 h2h_score = 0
-                if 'H2H_GAMES' in features.columns:
-                    h2h_games = features.iloc[i]['H2H_GAMES']
+                if available_columns['H2H_GAMES']:
+                    h2h_games = features_fixed.iloc[i]['H2H_GAMES']
                     h2h_score += min(h2h_games / 8, 1)  # Scale to [0, 1]
                 
-                if 'H2H_RECENCY_WEIGHT' in features.columns:
-                    h2h_recency = min(abs(features.iloc[i]['H2H_RECENCY_WEIGHT'] - 0.5) * 2, 1)  # Scale to [0, 1]
+                if available_columns['H2H_RECENCY_WEIGHT']:
+                    h2h_recency = min(abs(features_fixed.iloc[i]['H2H_RECENCY_WEIGHT'] - 0.5) * 2, 1)  # Scale to [0, 1]
                     h2h_score += h2h_recency
                 
                 if h2h_score > 0:
-                    avg_h2h = h2h_score / 2
+                    avg_h2h = h2h_score / 2 if h2h_score > 1 else h2h_score
                     score += avg_h2h * factors['h2h_history']
 
                 # 5. Rest advantage confidence
-                if 'REST_DIFF' in features.columns:
-                    rest_diff = abs(features.iloc[i]['REST_DIFF'])
+                if available_columns['REST_DIFF']:
+                    rest_diff = abs(features_fixed.iloc[i]['REST_DIFF'])
                     rest_conf = min(rest_diff / 3, 1)  # Scale to [0, 1]
                     score += rest_conf * factors['rest_advantage']
                 
                 # 6. Player impact confidence (if player availability features exist)
                 player_impact_score = 0
-                if 'PLAYER_IMPACT_DIFF' in features.columns:
-                    player_impact = abs(features.iloc[i]['PLAYER_IMPACT_DIFF'])
+                if available_columns['PLAYER_IMPACT_DIFF']:
+                    player_impact = abs(features_fixed.iloc[i]['PLAYER_IMPACT_DIFF'])
                     player_conf = min(player_impact / 0.2, 1)  # Scale to [0, 1]
                     player_impact_score += player_conf
                 
-                if 'PLAYER_IMPACT_HOME' in features.columns and 'PLAYER_IMPACT_AWAY' in features.columns:
-                    home_impact = features.iloc[i]['PLAYER_IMPACT_HOME']
-                    away_impact = features.iloc[i]['PLAYER_IMPACT_AWAY']
-                    relative_impact = abs(home_impact - away_impact) / max(home_impact, away_impact, 1)
+                if available_columns['PLAYER_IMPACT_HOME'] and available_columns['PLAYER_IMPACT_AWAY']:
+                    home_impact = features_fixed.iloc[i]['PLAYER_IMPACT_HOME']
+                    away_impact = features_fixed.iloc[i]['PLAYER_IMPACT_AWAY']
+                    # Avoid division by zero
+                    max_impact = max(abs(home_impact), abs(away_impact), 1)
+                    relative_impact = abs(home_impact - away_impact) / max_impact
                     player_impact_score += min(relative_impact * 5, 1)  # Scale to [0, 1]
                 
                 if player_impact_score > 0:
-                    avg_player_impact = player_impact_score / 2 if 'PLAYER_IMPACT_HOME' in features.columns else player_impact_score
+                    avg_player_impact = player_impact_score / 2 if player_impact_score > 1 else player_impact_score
                     score += avg_player_impact * factors['player_impact']
                 
                 # 7. Feature stability confidence
-                feature_stability_score = 0
-                feature_count = 0
-                
-                # Check the stability of top 5 most important features for this prediction
-                if hasattr(self, 'feature_importances') and hasattr(self, 'feature_stability'):
-                    for feat, imp in sorted(self.feature_importances.items(), key=lambda x: x[1], reverse=True)[:5]:
-                        if feat in features.columns:
+                if use_feature_stability:
+                    feature_stability_score = 0
+                    feature_count = 0
+                    
+                    # Check the stability of top 5 most important features for this prediction
+                    for feat, imp in top_features:
+                        if feat in features_fixed.columns:
                             # Get feature stability score from training
                             stability = self.feature_stability.get(feat, 0)
                             feature_stability_score += stability
@@ -1161,9 +1305,9 @@ class NBAEnhancedEnsembleModel:
                 
                 # Add team-specific variability to confidence score
                 # This ensures different teams get different confidence scores
-                if 'TEAM_ID_HOME' in features.columns and 'TEAM_ID_AWAY' in features.columns:
-                    team_home = features.iloc[i]['TEAM_ID_HOME']
-                    team_away = features.iloc[i]['TEAM_ID_AWAY']
+                if available_columns['TEAM_ID_HOME'] and available_columns['TEAM_ID_AWAY']:
+                    team_home = features_fixed.iloc[i]['TEAM_ID_HOME']
+                    team_away = features_fixed.iloc[i]['TEAM_ID_AWAY']
                     # Use team IDs to create a unique variability factor
                     team_factor = (hash(str(team_home) + str(team_away)) % 1000) / 10000  # Small value between 0 and 0.1
                     score += team_factor
