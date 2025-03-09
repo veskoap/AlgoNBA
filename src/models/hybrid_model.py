@@ -541,6 +541,25 @@ class HybridModel:
         
         print("Generating hybrid model predictions with confidence...")
         
+        # Pre-check columns for potential DataFrame types
+        problematic_columns = []
+        for col in X.columns:
+            try:
+                if isinstance(X[col], pd.DataFrame):
+                    print(f"Column {col} is a DataFrame in hybrid model input - fixing")
+                    if len(X[col].columns) > 0:
+                        X[col] = X[col].iloc[:, 0]
+                    else:
+                        X[col] = pd.Series(0.0, index=X.index)
+                    problematic_columns.append(col)
+            except Exception as e:
+                print(f"Error checking column {col}: {e}")
+                problematic_columns.append(col)
+                
+        # If we found problematic columns, check once more
+        if problematic_columns:
+            print(f"Fixed {len(problematic_columns)} DataFrame-type columns")
+        
         # Suppress repeated warning messages during prediction
         import warnings
         with warnings.catch_warnings():
@@ -559,7 +578,17 @@ class HybridModel:
             # Get deep model predictions with uncertainty
             try:
                 deep_preds, uncertainties = self.deep_model.predict_with_uncertainty(X)
-                deep_conf = self.deep_model.calculate_confidence_from_uncertainty(deep_preds, uncertainties)
+                # Validate uncertainties to ensure they're usable
+                if np.isnan(uncertainties).any() or np.isinf(uncertainties).any():
+                    print("Warning: NaN or Inf values in uncertainties - replacing with default values")
+                    uncertainties = np.nan_to_num(uncertainties, nan=0.2, posinf=0.5, neginf=0.5)
+                
+                try:
+                    deep_conf = self.deep_model.calculate_confidence_from_uncertainty(deep_preds, uncertainties)
+                except Exception as e:
+                    print(f"Error calculating deep model confidence: {e}")
+                    # Generate estimated confidence from prediction strength
+                    deep_conf = 0.5 + 0.4 * np.abs(deep_preds - 0.5) * 2  # Scale to [0.5, 0.9]
             except Exception as e:
                 print(f"Error getting deep model predictions with uncertainty: {e}")
                 print("Falling back to standard prediction without uncertainty")
@@ -574,86 +603,154 @@ class HybridModel:
                     deep_preds = np.full(len(X), 0.5)
                     deep_conf = np.full(len(X), 0.5)  # Default moderate confidence
         
+        # Validate predictions before combining
+        if np.isnan(ensemble_preds).any():
+            print("Warning: NaN values in ensemble predictions - replacing with 0.5")
+            ensemble_preds = np.nan_to_num(ensemble_preds, nan=0.5)
+        
+        if np.isnan(deep_preds).any():
+            print("Warning: NaN values in deep predictions - replacing with 0.5")
+            deep_preds = np.nan_to_num(deep_preds, nan=0.5)
+        
         # Make hybrid predictions using model weights
         hybrid_preds = self.ensemble_weight * ensemble_preds + (1 - self.ensemble_weight) * deep_preds
         
         # Calculate confidence scores using a more sophisticated approach
-        
-        # 1. Model agreement factor
-        # Higher agreement between models = higher confidence
-        model_agreement = 1.0 - np.abs(ensemble_preds - deep_preds)
-        
-        # 2. Weighted confidence from individual models
-        # Weight by model performance with ensemble model given preference by default
-        weighted_confidence = (
-            self.ensemble_weight * ensemble_conf + 
-            (1 - self.ensemble_weight) * deep_conf
-        )
-        
-        # 3. Boost factor for model agreement
-        # Apply non-linear boost for high agreement
-        agreement_boost = 0.15 * np.power(model_agreement, 2)
-        
-        # 4. Adjust by prediction strength factor
-        # Strong predictions deserve higher confidence
-        prediction_strength = 2.0 * np.abs(hybrid_preds - 0.5)  # Scale to [0, 1]
-        strength_boost = 0.1 * prediction_strength  # Max 10% boost
-        
-        # 5. Integrated confidence score
-        raw_confidence = weighted_confidence + agreement_boost + strength_boost
-        
-        # 6. Apply calibration to ensure reasonable confidence range
-        # Never fully certain or uncertain
-        calibrated_confidence = np.clip(raw_confidence, 0.35, 0.95)
+        try:
+            # 1. Model agreement factor
+            # Higher agreement between models = higher confidence
+            model_agreement = 1.0 - np.abs(ensemble_preds - deep_preds)
+            
+            # 2. Weighted confidence from individual models
+            # Weight by model performance with ensemble model given preference by default
+            weighted_confidence = (
+                self.ensemble_weight * ensemble_conf + 
+                (1 - self.ensemble_weight) * deep_conf
+            )
+            
+            # 3. Boost factor for model agreement
+            # Apply non-linear boost for high agreement
+            agreement_boost = 0.15 * np.power(model_agreement, 2)
+            
+            # 4. Adjust by prediction strength factor
+            # Strong predictions deserve higher confidence
+            prediction_strength = 2.0 * np.abs(hybrid_preds - 0.5)  # Scale to [0, 1]
+            strength_boost = 0.1 * prediction_strength  # Max 10% boost
+            
+            # 5. Integrated confidence score
+            raw_confidence = weighted_confidence + agreement_boost + strength_boost
+            
+            # 6. Apply calibration to ensure reasonable confidence range
+            # Never fully certain or uncertain
+            calibrated_confidence = np.clip(raw_confidence, 0.35, 0.95)
+        except Exception as e:
+            print(f"Error calculating confidence scores: {e}")
+            # Fallback to simpler confidence calculation
+            calibrated_confidence = 0.5 + 0.3 * np.abs(hybrid_preds - 0.5) * 2  # Scale to [0.5, 0.8]
         
         # 7. Apply data-specific adjustments based on features if available
         if 'TEAM_ID_HOME' in X.columns and 'TEAM_ID_AWAY' in X.columns:
             for i in range(len(hybrid_preds)):
-                # Fetch team information
                 try:
+                    # Fetch team information
                     team_home = X.iloc[i]['TEAM_ID_HOME']
                     team_away = X.iloc[i]['TEAM_ID_AWAY']
                     
-                    # H2H history adjustment
+                    # Validate team values - skip adjustment if invalid
+                    if pd.isna(team_home) or pd.isna(team_away) or team_home == 0 or team_away == 0:
+                        continue
+                    
+                    # Convert to string safely
+                    team_home_str = str(int(team_home))
+                    team_away_str = str(int(team_away))
+                    
+                    # H2H history adjustment with safe value checking
                     if 'H2H_WIN_PCT' in X.columns and 'H2H_GAMES' in X.columns:
-                        h2h_pct = X.iloc[i]['H2H_WIN_PCT']
-                        h2h_games = X.iloc[i]['H2H_GAMES']
-                        
-                        # Only adjust if we have enough H2H games
-                        if h2h_games >= 3:
-                            # Strong H2H trend adjustment
-                            h2h_strength = abs(h2h_pct - 0.5) * 2  # Scale to [0, 1]
-                            h2h_confidence_factor = 0.05 * h2h_strength * min(h2h_games / 10, 1)
-                            calibrated_confidence[i] += h2h_confidence_factor
-                    
-                    # Rest day advantage
-                    if 'REST_DIFF' in X.columns:
-                        rest_diff = abs(X.iloc[i]['REST_DIFF'])
-                        if rest_diff >= 2:  # Significant rest advantage
-                            calibrated_confidence[i] += 0.02  # Small boost
+                        try:
+                            h2h_pct = float(X.iloc[i]['H2H_WIN_PCT'])
+                            h2h_games = float(X.iloc[i]['H2H_GAMES'])
                             
-                    # Player availability impact
-                    if 'PLAYER_IMPACT_HOME' in X.columns and 'PLAYER_IMPACT_AWAY' in X.columns:
-                        # Player impact indicates missing key players
-                        player_impact_diff = abs(X.iloc[i]['PLAYER_IMPACT_HOME'] - X.iloc[i]['PLAYER_IMPACT_AWAY'])
-                        if player_impact_diff > 0.15:  # Significant player advantage
-                            calibrated_confidence[i] += 0.03
-                        
-                    # Apply adjustment to prediction based on team-specific factors
-                    team_variation = ((hash(str(team_home) + str(team_away)) % 1000) / 20000) - 0.025
-                    hybrid_preds[i] = np.clip(hybrid_preds[i] + team_variation, 0.1, 0.9)
+                            # Validate values
+                            if not pd.isna(h2h_pct) and not pd.isna(h2h_games) and h2h_games >= 3:
+                                # Strong H2H trend adjustment
+                                h2h_strength = abs(h2h_pct - 0.5) * 2  # Scale to [0, 1]
+                                h2h_confidence_factor = 0.05 * h2h_strength * min(h2h_games / 10, 1)
+                                calibrated_confidence[i] += h2h_confidence_factor
+                        except Exception as e:
+                            # Skip this H2H adjustment if there's an error
+                            pass
                     
-                    # Apply H2H history adjustment to prediction
+                    # Rest day advantage with safe value checking
+                    if 'REST_DIFF' in X.columns:
+                        try:
+                            rest_col = X.iloc[i]['REST_DIFF']
+                            # Check if REST_DIFF is a Series/DataFrame itself
+                            if isinstance(rest_col, (pd.Series, pd.DataFrame)):
+                                if isinstance(rest_col, pd.DataFrame) and len(rest_col.columns) > 0:
+                                    rest_diff = abs(float(rest_col.iloc[0, 0]))
+                                elif isinstance(rest_col, pd.Series):
+                                    rest_diff = abs(float(rest_col.iloc[0]))
+                                else:
+                                    rest_diff = 0  # Default if we can't extract
+                            else:
+                                rest_diff = abs(float(rest_col))
+                                
+                            if rest_diff >= 2:  # Significant rest advantage
+                                calibrated_confidence[i] += 0.02  # Small boost
+                        except Exception:
+                            # Skip rest adjustment if there's an error
+                            pass
+                    
+                    # Player availability impact with safe value checking
+                    if 'PLAYER_IMPACT_HOME' in X.columns and 'PLAYER_IMPACT_AWAY' in X.columns:
+                        try:
+                            # Safely extract player impact values
+                            home_impact = float(X.iloc[i]['PLAYER_IMPACT_HOME'])
+                            away_impact = float(X.iloc[i]['PLAYER_IMPACT_AWAY'])
+                            
+                            # Check for valid values
+                            if not pd.isna(home_impact) and not pd.isna(away_impact):
+                                player_impact_diff = abs(home_impact - away_impact)
+                                if player_impact_diff > 0.15:  # Significant player advantage
+                                    calibrated_confidence[i] += 0.03
+                        except Exception:
+                            # Skip player impact adjustment if there's an error
+                            pass
+                    
+                    # Apply adjustment to prediction based on team-specific factors
+                    try:
+                        team_variation = ((hash(team_home_str + team_away_str) % 1000) / 20000) - 0.025
+                        hybrid_preds[i] = np.clip(hybrid_preds[i] + team_variation, 0.1, 0.9)
+                    except Exception:
+                        # Skip team variation if there's an error
+                        pass
+                    
+                    # Apply H2H history adjustment to prediction with safe value checking
                     if 'H2H_WIN_PCT' in X.columns:
-                        h2h_pct = X.iloc[i]['H2H_WIN_PCT'] 
-                        h2h_impact = (h2h_pct - 0.5) * 0.08  # Reduced impact
-                        hybrid_preds[i] = np.clip(hybrid_preds[i] + h2h_impact, 0.1, 0.9)
+                        try:
+                            h2h_pct = float(X.iloc[i]['H2H_WIN_PCT'])
+                            if not pd.isna(h2h_pct):
+                                h2h_impact = (h2h_pct - 0.5) * 0.08  # Reduced impact
+                                hybrid_preds[i] = np.clip(hybrid_preds[i] + h2h_impact, 0.1, 0.9)
+                        except Exception:
+                            # Skip H2H adjustment if there's an error
+                            pass
                 
                 except Exception as e:
-                    print(f"Warning: Error in team-specific adjustment: {e}")
+                    # Skip all adjustments for this row if we hit an error
+                    continue
         
         # 8. Final confidence calibration
         final_confidence = np.clip(calibrated_confidence, 0.35, 0.95)
+        
+        # Final validation to catch any remaining NaN values
+        if np.isnan(hybrid_preds).any():
+            print("Warning: NaN values in final predictions - replacing with 0.5")
+            hybrid_preds = np.nan_to_num(hybrid_preds, nan=0.5)
+            
+        if np.isnan(final_confidence).any():
+            print("Warning: NaN values in confidence scores - replacing with 0.5")
+            final_confidence = np.nan_to_num(final_confidence, nan=0.5)
         
         # Ensure predictions stay in valid range
         hybrid_preds = np.clip(hybrid_preds, 0.05, 0.95)

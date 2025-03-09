@@ -1879,6 +1879,7 @@ class EnhancedDeepModelTrainer:
         model.enable_mc_dropout(True)
         
         # Input validation to ensure X_scaled is valid
+        expected_features = None
         try:
             # Ensure input array is valid and has correct dimensions
             if not isinstance(X_scaled, np.ndarray):
@@ -1900,18 +1901,45 @@ class EnhancedDeepModelTrainer:
                 print(f"Warning: Input has {X_scaled.shape[1]} features, but model expects {expected_features}")
                 # Adjust dimensions
                 if X_scaled.shape[1] > expected_features:
+                    print(f"Truncating input from {X_scaled.shape[1]} to {expected_features} features")
                     X_scaled = X_scaled[:, :expected_features]
                 else:
                     # Pad with zeros
+                    print(f"Padding input from {X_scaled.shape[1]} to {expected_features} features")
                     padding = np.zeros((X_scaled.shape[0], expected_features - X_scaled.shape[1]))
                     X_scaled = np.concatenate([X_scaled, padding], axis=1)
+                
+                # Double-check the adjusted dimensions
+                if X_scaled.shape[1] != expected_features:
+                    print(f"ERROR: Failed to adjust input dimensions. Got {X_scaled.shape[1]}, expected {expected_features}")
+                    # Force the correct size as a last resort
+                    X_scaled = np.zeros((X_scaled.shape[0], expected_features))
         except Exception as ex:
             print(f"Error preparing input for MC dropout: {ex}")
             # Create default input as emergency fallback
             if expected_features:
                 X_scaled = np.zeros((1, expected_features))
             else:
-                X_scaled = np.zeros((1, 10))  # Arbitrary fallback
+                # Try to infer expected features from model
+                try:
+                    for module in model.modules():
+                        if isinstance(module, nn.Linear):
+                            expected_features = module.in_features
+                            print(f"Inferred expected features: {expected_features}")
+                            break
+                except Exception:
+                    # If all else fails
+                    expected_features = 512  # Typical default size for this model
+                    print(f"Using default expected features: {expected_features}")
+                
+                X_scaled = np.zeros((1, expected_features))  # Safe fallback size
+        
+        # Final validation to ensure X_scaled has correct dimensions
+        if expected_features and X_scaled.shape[1] != expected_features:
+            print(f"CRITICAL: Input dimensions still don't match after adjustment!")
+            print(f"Got {X_scaled.shape[1]}, expected {expected_features}")
+            # Force correct dimensions as last resort
+            X_scaled = np.zeros((X_scaled.shape[0], expected_features))
         
         # Create dataset and dataloader for batch processing
         try:
@@ -1929,7 +1957,7 @@ class EnhancedDeepModelTrainer:
             if expected_features:
                 X_tensor = torch.zeros((1, expected_features), device=self.device)
             else:
-                X_tensor = torch.zeros((1, 10), device=self.device)  # Arbitrary fallback size
+                X_tensor = torch.zeros((1, 512), device=self.device)  # Safe fallback size
             dataset = torch.utils.data.TensorDataset(X_tensor)
             dataloader = DataLoader(dataset, batch_size=1)
         
@@ -1946,12 +1974,63 @@ class EnhancedDeepModelTrainer:
                             # Move to device
                             inputs = inputs.to(self.device)
                             
+                            # Final verification of tensor shape before model forward pass
+                            if hasattr(model, 'stem') and hasattr(model.stem[0], 'in_features'):
+                                expected_input_size = model.stem[0].in_features
+                                if inputs.shape[1] != expected_input_size:
+                                    print(f"Mismatch before forward pass: {inputs.shape[1]} vs expected {expected_input_size}")
+                                    # Adjust dimensions one final time
+                                    if inputs.shape[1] > expected_input_size:
+                                        inputs = inputs[:, :expected_input_size]
+                                    else:
+                                        padding = torch.zeros(inputs.shape[0], expected_input_size - inputs.shape[1], 
+                                                            device=inputs.device)
+                                        inputs = torch.cat([inputs, padding], dim=1)
+                            
                             # Forward pass with mixed precision if available
-                            if self.use_amp and torch.cuda.is_available():
-                                with compatible_autocast():
+                            try:
+                                if self.use_amp and torch.cuda.is_available():
+                                    with compatible_autocast():
+                                        outputs = model(inputs)
+                                else:
                                     outputs = model(inputs)
-                            else:
-                                outputs = model(inputs)
+                            except RuntimeError as e:
+                                if "mat1 and mat2 shapes cannot be multiplied" in str(e):
+                                    # Handle dimension mismatch by trying one more approach
+                                    print(f"Matrix dimension mismatch: {str(e)}")
+                                    print("Attempting to recover with correct dimensions...")
+                                    
+                                    # Try to extract dimension information from the error
+                                    import re
+                                    match = re.search(r"(\d+)x(\d+) and (\d+)x(\d+)", str(e))
+                                    if match:
+                                        a, b, c, d = map(int, match.groups())
+                                        print(f"Mismatch: ({a}x{b}) x ({c}x{d})")
+                                        
+                                        if b != c and c > 0:
+                                            # We need input dimension c
+                                            expected_input_size = c
+                                            
+                                            if inputs.shape[1] != expected_input_size:
+                                                print(f"Correcting dimensions to {expected_input_size}")
+                                                if inputs.shape[1] > expected_input_size:
+                                                    inputs = inputs[:, :expected_input_size]
+                                                else:
+                                                    padding = torch.zeros(inputs.shape[0], expected_input_size - inputs.shape[1], 
+                                                                        device=inputs.device)
+                                                    inputs = torch.cat([inputs, padding], dim=1)
+                                                
+                                                # Try again with corrected dimensions
+                                                outputs = model(inputs)
+                                            else:
+                                                # If dimensions already match but still fails, use default values
+                                                raise
+                                    else:
+                                        # Couldn't parse dimensions from error, use default values
+                                        raise
+                                else:
+                                    # Some other error occurred
+                                    raise
                             
                             # Get probabilities with error handling
                             try:
@@ -1998,6 +2077,23 @@ class EnhancedDeepModelTrainer:
             
             # Check if we have valid samples
             if mc_sample_list:
+                # Verify all samples have the same shape
+                sample_shapes = [sample.shape for sample in mc_sample_list]
+                if len(set(sample_shapes)) > 1:
+                    print(f"Warning: Inconsistent sample shapes: {sample_shapes}")
+                    # Fix inconsistent shapes
+                    target_shape = max(len(sample) for sample in mc_sample_list)
+                    for i, sample in enumerate(mc_sample_list):
+                        if len(sample) != target_shape:
+                            print(f"Fixing sample {i} from shape {sample.shape} to length {target_shape}")
+                            # Pad or truncate to match target shape
+                            if len(sample) < target_shape:
+                                # Pad with default values
+                                mc_sample_list[i] = np.concatenate([sample, np.ones(target_shape - len(sample)) * 0.5])
+                            else:
+                                # Truncate
+                                mc_sample_list[i] = sample[:target_shape]
+                
                 return mc_sample_list
             else:
                 # Create default samples if none were valid

@@ -71,6 +71,7 @@ class NBAEnhancedEnsembleModel:
             try:
                 col_data = df[col]
                 if isinstance(col_data, pd.DataFrame):
+                    print(f"Column {col} is a DataFrame, extracting first column")
                     df_columns.append(col)
                     problematic_columns.append(col)
             except Exception:
@@ -79,25 +80,34 @@ class NBAEnhancedEnsembleModel:
         # Create a data dictionary to build a new DataFrame from scratch
         data_dict = {}
         
-        # Process known problematic columns first
+        # Process known problematic columns first - these columns often show up as DataFrames
         known_problematic = ['WIN_PCT_DIFF_30D', 'REST_DIFF']
         for col in known_problematic:
             if col in df.columns:
                 try:
-                    if col == 'WIN_PCT_DIFF_30D':
+                    col_data = df[col]
+                    if isinstance(col_data, pd.DataFrame):
+                        if len(col_data.columns) > 0:
+                            # Extract the first column if it's a DataFrame
+                            print(f"Column {col} is a DataFrame, extracting first column")
+                            data_dict[col] = col_data.iloc[:, 0].values
+                        else:
+                            # Create empty column
+                            data_dict[col] = np.zeros(len(df))
+                    elif col == 'WIN_PCT_DIFF_30D':
                         if 'WIN_PCT_HOME_30D' in df.columns and 'WIN_PCT_AWAY_30D' in df.columns:
                             # Calculate this derived column
                             data_dict[col] = df['WIN_PCT_HOME_30D'].values - df['WIN_PCT_AWAY_30D'].values
                         else:
-                            # Fallback to zeros
-                            data_dict[col] = np.zeros(len(df))
+                            # Use the existing column directly
+                            data_dict[col] = col_data.values
                     elif col == 'REST_DIFF':
                         if 'REST_DAYS_HOME' in df.columns and 'REST_DAYS_AWAY' in df.columns:
                             # Calculate this derived column
                             data_dict[col] = df['REST_DAYS_HOME'].values - df['REST_DAYS_AWAY'].values
                         else:
-                            # Fallback to zeros
-                            data_dict[col] = np.zeros(len(df))
+                            # Use the existing column directly
+                            data_dict[col] = col_data.values
                 except Exception as e:
                     # Only show the error once
                     if not hasattr(self, '_shown_column_errors') or col not in self._shown_column_errors:
@@ -110,12 +120,16 @@ class NBAEnhancedEnsembleModel:
         
         # Process DataFrame columns
         if df_columns:
-            print(f"Processing {len(df_columns)} DataFrame-type columns")
             for col in df_columns:
+                if col in known_problematic:
+                    # Skip if already processed above
+                    continue
+                    
                 try:
                     col_data = df[col]
                     if isinstance(col_data, pd.DataFrame) and len(col_data.columns) > 0:
                         # Extract the first column as values
+                        print(f"Column {col} is a DataFrame, extracting first column")
                         data_dict[col] = col_data.iloc[:, 0].values
                     else:
                         # Create zeros as fallback
@@ -140,16 +154,30 @@ class NBAEnhancedEnsembleModel:
         # Final check for any columns that should be numeric
         numeric_candidates = []
         for col in result.columns:
-            if result[col].dtype == 'object':
+            try:
+                if result[col].dtype == 'object':
+                    numeric_candidates.append(col)
+            except Exception as e:
+                print(f"Error checking dtype for column {col}: {e}")
+                # If we can't check the dtype, try to convert it anyway
                 numeric_candidates.append(col)
                 
         # Convert object columns to numeric all at once
         if numeric_candidates:
+            print(f"Converting {len(numeric_candidates)} columns to numeric")
             for col in numeric_candidates:
                 try:
                     result[col] = pd.to_numeric(result[col], errors='coerce').fillna(0)
-                except:
-                    pass
+                except Exception as e:
+                    print(f"Error converting {col} to numeric: {e}")
+                    # If conversion fails, remove the column
+                    problematic_columns.append(col)
+        
+        # Remove any remaining problematic columns that couldn't be converted
+        columns_to_remove = [col for col in problematic_columns if col in result.columns and isinstance(result[col], pd.DataFrame)]
+        if columns_to_remove:
+            print(f"Removing {len(columns_to_remove)} non-numeric columns for ML compatibility: {columns_to_remove}")
+            result = result.drop(columns=columns_to_remove)
         
         return result
         
