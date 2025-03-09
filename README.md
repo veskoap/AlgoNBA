@@ -85,6 +85,20 @@ The system now includes specialized optimizations for TPU hardware:
 
 8. **TPU-friendly model architecture**: Avoids operations that are inefficient on TPU.
 
+**Note**: If you encounter PyTorch CUDA/NCCL errors on Google Cloud TPU VMs, use one of these solutions:
+```bash
+# Solution 1: Run in CPU-only mode
+export CUDA_VISIBLE_DEVICES=""
+python main.py --no-cache
+
+# Solution 2: Install PyTorch CPU-only version
+pip uninstall -y torch
+pip install torch --index-url https://download.pytorch.org/whl/cpu
+
+# Solution 3: Use standard models (skips deep learning)
+python main.py --standard
+```
+
 ### A100 GPU Optimizations
 
 The system also includes specialized optimizations for A100 GPUs:
@@ -644,6 +658,15 @@ Error checking dtype for feature column REST_DIFF: 'DataFrame' object has no att
 ```
 - **Explanation**: These are diagnostic messages from the enhanced feature processing pipeline, not actual errors.
 - **Solution**: These messages are part of the system's robust error handling. The system automatically recovers and generates the features correctly.
+
+```
+ImportError: /path/to/torch/lib/libtorch_cuda.so: undefined symbol: ncclCommRegister
+```
+- **Explanation**: This error occurs on systems where PyTorch was installed with CUDA support but there's a version mismatch with the NCCL library.
+- **Solution**: Use one of these approaches:
+  1. Set `export CUDA_VISIBLE_DEVICES=""` to use CPU-only mode
+  2. Reinstall PyTorch without CUDA: `pip uninstall -y torch && pip install torch --index-url https://download.pytorch.org/whl/cpu`
+  3. Run with the `--standard` flag: `python main.py --standard` to skip deep learning models
 
 #### Google Colab Integration
 
