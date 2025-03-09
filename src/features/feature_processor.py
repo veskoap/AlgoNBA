@@ -93,6 +93,9 @@ class FeatureTransformer:
         # Make a copy to start with
         result = features.copy()
         
+        # First pass: fix any DataFrame columns that should be Series
+        self._fix_dataframe_columns(result)
+        
         # Create a dictionary to store all new features we'll add
         new_features = {}
         
@@ -128,8 +131,29 @@ class FeatureTransformer:
             # Convert to DataFrame and join with original features
             new_features_df = pd.DataFrame(new_features, index=result.index)
             result = pd.concat([result, new_features_df], axis=1)
+            
+            # Fix any newly created DataFrame columns that should be Series
+            self._fix_dataframe_columns(result)
                     
         return result
+        
+    def _fix_dataframe_columns(self, df: pd.DataFrame) -> None:
+        """
+        Convert any DataFrame columns to Series to avoid fragmentation issues.
+        
+        Args:
+            df: DataFrame to fix
+        """
+        for col in df.columns:
+            if isinstance(df[col], pd.DataFrame):
+                print(f"Column {col} is a DataFrame, extracting first column")
+                if len(df[col].columns) > 0:
+                    # Create a proper Series from the first column
+                    series_value = df[col].iloc[:, 0]
+                    df[col] = series_value
+                else:
+                    # Create a zero-filled Series if the DataFrame is empty
+                    df[col] = pd.Series(np.zeros(len(df)), index=df.index)
         
     def _derive_feature_value(self, df: pd.DataFrame, feature_name: str, 
                       feature_info: Dict, window: str = None) -> pd.Series:
@@ -401,31 +425,41 @@ class FeatureTransformer:
             rest_diff = dependencies[1]  # REST_DIFF
             
             try:
-                # Get win percentage difference, safely handling DataFrame case
-                win_pct_series = df[win_pct_diff]
-                if isinstance(win_pct_series, pd.DataFrame):
-                    # If it's a DataFrame, extract first column
-                    print(f"Converting {win_pct_diff} from DataFrame to Series")
-                    if len(win_pct_series.columns) > 0:
-                        win_pct_values = win_pct_series.iloc[:, 0].values
-                    else:
-                        win_pct_values = np.zeros(len(df))
-                else:
-                    # It's a Series, use values directly
+                # Get win percentage difference values
+                if win_pct_diff in df.columns:
+                    win_pct_series = df[win_pct_diff]
+                    # Convert DataFrame to Series if necessary
+                    if isinstance(win_pct_series, pd.DataFrame):
+                        # If it's a DataFrame, convert to Series properly
+                        print(f"Column {win_pct_diff} is a DataFrame, extracting first column")
+                        if len(win_pct_series.columns) > 0:
+                            # Create a proper Series from the first column
+                            win_pct_series = win_pct_series.iloc[:, 0]
+                            df[win_pct_diff] = win_pct_series  # Also update in the main dataframe
+                        else:
+                            win_pct_series = pd.Series(np.zeros(len(df)), index=df.index)
+                            df[win_pct_diff] = win_pct_series
                     win_pct_values = win_pct_series.values
-                
-                # Get rest difference, safely handling DataFrame case
-                rest_series = df[rest_diff]
-                if isinstance(rest_series, pd.DataFrame):
-                    # If it's a DataFrame, extract first column
-                    print(f"Converting {rest_diff} from DataFrame to Series")
-                    if len(rest_series.columns) > 0:
-                        rest_values = rest_series.iloc[:, 0].values
-                    else:
-                        rest_values = np.zeros(len(df))
                 else:
-                    # It's a Series, use values directly
+                    win_pct_values = np.zeros(len(df))
+                
+                # Get rest difference values
+                if rest_diff in df.columns:
+                    rest_series = df[rest_diff]
+                    # Convert DataFrame to Series if necessary
+                    if isinstance(rest_series, pd.DataFrame):
+                        # If it's a DataFrame, convert to Series properly
+                        print(f"Column {rest_diff} is a DataFrame, extracting first column")
+                        if len(rest_series.columns) > 0:
+                            # Create a proper Series from the first column
+                            rest_series = rest_series.iloc[:, 0]
+                            df[rest_diff] = rest_series  # Also update in the main dataframe
+                        else:
+                            rest_series = pd.Series(np.zeros(len(df)), index=df.index)
+                            df[rest_diff] = rest_series
                     rest_values = rest_series.values
+                else:
+                    rest_values = np.zeros(len(df))
                 
                 # Create Series explicitly using the cleaned values
                 result = pd.Series(
@@ -1584,8 +1618,21 @@ class NBAFeatureProcessor:
                     if isinstance(col_data, pd.Series) and col_data.dtype in [np.float64, np.int64]:
                         feature_cols.append(col)
                     elif isinstance(col_data, pd.DataFrame):
-                        # Handle DataFrame columns
-                        print(f"Skipping DataFrame column {col} from feature count")
+                        # Convert DataFrame to Series and include in feature count
+                        print(f"Column {col} is a DataFrame, extracting first column")
+                        if len(col_data.columns) > 0:
+                            # Create a proper Series from the first column
+                            series_value = col_data.iloc[:, 0]
+                            enhanced_features[col] = series_value  # Update in the main dataframe
+                            
+                            # Now check if the converted Series is numeric and add it to feature_cols
+                            if series_value.dtype in [np.float64, np.int64]:
+                                feature_cols.append(col)
+                        else:
+                            # Create a zero-filled Series if the DataFrame is empty
+                            series_value = pd.Series(np.zeros(len(enhanced_features)), index=enhanced_features.index)
+                            enhanced_features[col] = series_value
+                            feature_cols.append(col)  # Add zero-filled numeric series to feature_cols
                 except Exception as e:
                     print(f"Error checking dtype for feature column {col}: {str(e)}")
         print(f"\nCreated {len(feature_cols)} features:")
@@ -1604,9 +1651,25 @@ class NBAFeatureProcessor:
         for col in enhanced_features.columns:
             if col != 'TARGET':
                 try:
-                    # Check column type safely
-                    col_dtype = enhanced_features[col].dtype
-                    if col_dtype not in [np.float64, np.int64, bool, 'float32', 'int32']:
+                    # Check if column is a DataFrame
+                    col_data = enhanced_features[col]
+                    if isinstance(col_data, pd.DataFrame):
+                        # Convert DataFrame to Series first
+                        print(f"Column {col} is a DataFrame, extracting first column")
+                        if len(col_data.columns) > 0:
+                            # Create a proper Series from the first column
+                            series_value = col_data.iloc[:, 0]
+                            enhanced_features[col] = series_value  # Update in the main dataframe
+                            
+                            # Check if the converted Series is numeric
+                            if series_value.dtype not in [np.float64, np.int64, bool, 'float32', 'int32']:
+                                non_numeric_cols.append(col)
+                        else:
+                            # Create a zero-filled Series if the DataFrame is empty
+                            series_value = pd.Series(np.zeros(len(enhanced_features)), index=enhanced_features.index)
+                            enhanced_features[col] = series_value  # These will be numeric
+                    # Check regular Series
+                    elif col_data.dtype not in [np.float64, np.int64, bool, 'float32', 'int32']:
                         non_numeric_cols.append(col)
                 except Exception as e:
                     print(f"Error checking dtype for exclusion column {col}: {str(e)}")
