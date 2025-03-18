@@ -399,7 +399,7 @@ def main():
         top_features = predictor.get_feature_importances(10)
         print("\nTop 10 most important features:")
         for feature, importance in top_features.items():
-            print("- {feature}: {}".format(importance:.4f))
+            print("- {}: {:.4f}".format(feature, importance))
         
         # Example prediction
         print("\nPrediction example:")
