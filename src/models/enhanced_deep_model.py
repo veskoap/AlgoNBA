@@ -966,10 +966,15 @@ class EnhancedDeepModelTrainer:
                 )
             elif self.scheduler_type == "one_cycle":
                 # One cycle learning rate (better for TPU and A100 with fewer epochs)
+                # Calculate total steps, ensuring it's at least 1 to avoid the error
+                steps_per_epoch = max(1, len(train_loader))
+                total_steps = self.epochs * steps_per_epoch
+                print(f"OneCycleLR scheduler with {self.epochs} epochs, {steps_per_epoch} steps per epoch, {total_steps} total steps")
+                
                 scheduler = optim.lr_scheduler.OneCycleLR(
                     optimizer,
                     max_lr=self.learning_rate * 10,
-                    total_steps=self.epochs * len(train_loader),
+                    total_steps=total_steps,
                     pct_start=0.3,
                     div_factor=25,
                     final_div_factor=1000
