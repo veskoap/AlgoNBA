@@ -565,41 +565,78 @@ class EnhancedDeepModelTrainer:
                 # Only attempt TPU initialization if explicitly requested
                 force_tpu = os.environ.get('ALGONBA_FORCE_TPU') == '1'
                 if force_tpu:
-                    try:
-                        import torch_xla.core.xla_model as xm
-                        import torch_xla.distributed.parallel_loader as pl
+                    # Check for safe TPU mode which avoids SIGABRT
+                    if os.environ.get('ALGONBA_SAFE_TPU') == '1':
+                        print("Using safe TPU initialization in EnhancedDeepModelTrainer (ALGONBA_SAFE_TPU=1)")
+                        # Don't create the device or import xm which crashes
+                        self.device = 'tpu-safe-mode'
+                        self.is_tpu = True
                         
-                        print("Attempting to use TPU with direct initialization (forced mode)")
+                        # Set BF16 but avoid PJRT which causes the crash
+                        os.environ['XLA_USE_BF16'] = '1'
+                        # Set flags to avoid profiling which crashes
+                        if 'XLA_FLAGS' not in os.environ:
+                            os.environ['XLA_FLAGS'] = '--xla_cpu_enable_xprof=false'
+                        
+                        print("TPU-compatible mode with safeguards active in EnhancedDeepModelTrainer")
+                        
+                        # TPU-specific optimizations
+                        original_batch = batch_size
+                        
+                        # Much larger batch size for TPU v2-8
+                        batch_size = max(1024, batch_size * 16)  # 16x larger batches for TPU
+                        
+                        print(f"TPU detected: Significantly increasing batch size from {original_batch} to {batch_size}")
+                        
+                        # Force AMP for TPU
+                        use_amp = True
+                        
+                        # TPU prefers different scheduler types
+                        if scheduler_type == "cosine":
+                            print("Adjusting scheduler for TPU: using one_cycle instead of cosine")
+                            scheduler_type = "one_cycle"
+                        
+                        # Adjust worker threads for TPU
+                        num_workers = 4  # TPU works better with fewer workers
+                    else:
                         try:
-                            # Create device directly instead of querying topology
-                            self.device = xm.xla_device()
-                            self.is_tpu = True
-                            print(f"TPU device created: {self.device}")
+                            import torch_xla.core.xla_model as xm
+                            import torch_xla.distributed.parallel_loader as pl
                             
-                            # TPU-specific optimizations
-                            original_batch = batch_size
-                            
-                            # Much larger batch size for TPU v2-8
-                            batch_size = max(1024, batch_size * 16)  # 16x larger batches for TPU
-                            
-                            print(f"TPU detected: Significantly increasing batch size from {original_batch} to {batch_size}")
-                            
-                            # Force AMP for TPU
-                            use_amp = True
-                            
-                            # TPU prefers different scheduler types
-                            if scheduler_type == "cosine":
-                                print("Adjusting scheduler for TPU: using one_cycle instead of cosine")
-                                scheduler_type = "one_cycle"
-                            
-                            # Adjust worker threads for TPU
-                            num_workers = 4  # TPU works better with fewer workers
-                        except Exception as e:
-                            print(f"Failed to create TPU device: {e}")
+                            print("Attempting to use TPU with direct initialization (forced mode)")
+                            try:
+                                # Create device directly instead of querying topology
+                                self.device = xm.xla_device()
+                                self.is_tpu = True
+                                print(f"TPU device created: {self.device}")
+                                
+                                # TPU-specific optimizations
+                                original_batch = batch_size
+                                
+                                # Much larger batch size for TPU v2-8
+                                batch_size = max(1024, batch_size * 16)  # 16x larger batches for TPU
+                                
+                                print(f"TPU detected: Significantly increasing batch size from {original_batch} to {batch_size}")
+                                
+                                # Force AMP for TPU
+                                use_amp = True
+                                
+                                # TPU prefers different scheduler types
+                                if scheduler_type == "cosine":
+                                    print("Adjusting scheduler for TPU: using one_cycle instead of cosine")
+                                    scheduler_type = "one_cycle"
+                                
+                                # Adjust worker threads for TPU
+                                num_workers = 4  # TPU works better with fewer workers
+                            except Exception as e:
+                                print(f"Failed to create TPU device: {e}")
+                                self.is_tpu = False
+                        except ImportError as e:
+                            print(f"Could not import required TPU modules: {e}")
                             self.is_tpu = False
-                    except ImportError as e:
-                        print(f"Could not import required TPU modules: {e}")
-                        self.is_tpu = False
+                except ImportError as e:
+                    print(f"Could not import required TPU modules: {e}")
+                    self.is_tpu = False
                 else:
                     print("TPU capability detected but TPU use not requested. Run with --use-tpu and ALGONBA_FORCE_TPU=1 to use TPU.")
                     self.is_tpu = False

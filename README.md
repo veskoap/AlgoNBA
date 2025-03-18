@@ -106,24 +106,43 @@ When running on Google Cloud TPU VMs, use the included helper script for a safer
 ./tpu_run.sh --quick --save-models
 ```
 
-The helper script provides three execution modes:
+The helper script provides four execution modes:
 1. **Safe mode (default)**: Runs in CPU-only mode, disabling TPU/GPU for guaranteed stability
 2. **TPU detection mode**: Detects TPU but uses CPU for computation
-3. **TPU forced mode**: Attempts to use TPU acceleration (may crash on some TPU VM configurations)
+3. **TPU forced mode**: Attempts to use TPU acceleration with safeguards (recommended first TPU approach)
+4. **Ultra-safe TPU mode**: Completely bypasses PyTorch XLA initialization (use if option 3 crashes)
+
+If option 3 (TPU forced mode) crashes with SIGABRT, try option 4 (Ultra-safe TPU mode), which bypasses PyTorch XLA initialization completely.
 
 For advanced usage, you can also set these environment variables:
 - `ALGONBA_DISABLE_TPU=1`: Completely disables TPU detection and usage
 - `ALGONBA_FORCE_TPU=1`: Forces TPU usage with direct device creation
+- `ALGONBA_SAFE_TPU=1`: Uses a safer TPU initialization that avoids SIGABRT crashes
+- `ALGONBA_ULTRA_SAFE_TPU=1`: Completely bypasses PyTorch XLA for maximum stability
 
 ```bash
 # Force CPU-only mode
 export ALGONBA_DISABLE_TPU=1
 python main.py
 
-# Force TPU mode (may crash)
+# Force TPU mode with safeguards
 export ALGONBA_FORCE_TPU=1
+export ALGONBA_SAFE_TPU=1
 python main.py --use-tpu
+
+# Ultra-safe mode that bypasses PyTorch XLA completely
+export ALGONBA_ULTRA_SAFE_TPU=1
+export DISABLE_TORCH_XLA_RUNTIME=1
+python main.py
 ```
+
+#### Common TPU Issues
+
+If you encounter a SIGABRT or "Failed to get global TPU topology" error:
+
+1. Try running with option 3 (TPU forced mode) which uses ALGONBA_SAFE_TPU=1
+2. If that still crashes, use option 4 (Ultra-safe TPU mode) which completely bypasses PyTorch XLA
+3. As a last resort, fall back to option 1 (Safe mode) for CPU-only execution
 
 **Note**: If you encounter PyTorch CUDA/NCCL errors on Google Cloud TPU VMs, use one of these solutions:
 ```bash

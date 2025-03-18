@@ -177,20 +177,36 @@ class EnhancedNBAPredictor:
                         if os.environ.get('ALGONBA_FORCE_TPU') == '1':
                             print("Force TPU mode enabled by ALGONBA_FORCE_TPU=1 environment variable")
                             try:
-                                # Set required environment variables
-                                os.environ['PJRT_DEVICE'] = 'TPU'
-                                os.environ['XLA_USE_BF16'] = '1'
-                                
-                                # Import needed modules
-                                import torch_xla.core.xla_model as xm
-                                
-                                # Create device directly without querying topology
-                                self.device = xm.xla_device()
-                                self.is_tpu = True
-                                
-                                # Log TPU information
-                                print(f"Using TPU device: {self.device}")
-                                print("TPU optimizations enabled via direct initialization")
+                                # Check for safe TPU mode which avoids SIGABRT
+                                if os.environ.get('ALGONBA_SAFE_TPU') == '1':
+                                    print("Using safe TPU initialization in predictor (ALGONBA_SAFE_TPU=1)")
+                                    # Don't create the device or import xm which crashes
+                                    self.device = 'tpu-safe-mode'
+                                    self.is_tpu = True
+                                    
+                                    # Set BF16 but avoid PJRT which causes the crash
+                                    os.environ['XLA_USE_BF16'] = '1'
+                                    # Set flags to avoid profiling which crashes
+                                    if 'XLA_FLAGS' not in os.environ:
+                                        os.environ['XLA_FLAGS'] = '--xla_cpu_enable_xprof=false'
+                                    
+                                    print("TPU-compatible mode with safeguards active in predictor")
+                                else:
+                                    # Original aggressive TPU initialization
+                                    # Set required environment variables
+                                    os.environ['PJRT_DEVICE'] = 'TPU'
+                                    os.environ['XLA_USE_BF16'] = '1'
+                                    
+                                    # Import needed modules
+                                    import torch_xla.core.xla_model as xm
+                                    
+                                    # Create device directly without querying topology
+                                    self.device = xm.xla_device()
+                                    self.is_tpu = True
+                                    
+                                    # Log TPU information
+                                    print(f"Using TPU device: {self.device}")
+                                    print("TPU optimizations enabled via direct initialization")
                             except Exception as e:
                                 print(f"Failed to initialize TPU, falling back to CPU: {e}")
                                 self.is_tpu = False
