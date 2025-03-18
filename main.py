@@ -101,7 +101,7 @@ def setup_tpu():
                     # Mark as TPU available so other code branches can use it
                     return True
                 except Exception as e:
-                    print(f"Error in safe TPU initialization: {e}")
+                    print("Error in safe TPU initialization: {}".format(e))
                     return False
             else:
                 # Original aggressive TPU initialization
@@ -115,10 +115,10 @@ def setup_tpu():
                     
                     # Create device directly
                     device = xm.xla_device()
-                    print(f"Successfully created TPU device: {device}")
+                    print("Successfully created TPU device: {}".format(device))
                     return True
                 except Exception as e:
-                    print(f"Failed to initialize TPU, falling back to CPU: {e}")
+                    print("Failed to initialize TPU, falling back to CPU: {}".format(e))
                     return False
         else:
             return False
@@ -263,7 +263,7 @@ def main():
                 else:
                     print("No TPU detected or setup failed. Falling back to GPU/CPU.")
             except Exception as e:
-                print(f"Error during TPU setup: {e}")
+                print("Error during TPU setup: {}".format(e))
                 print("Falling back to GPU/CPU.")
                 is_tpu_available = False
         
@@ -285,11 +285,11 @@ def main():
                     # Use Drive for cache unless explicitly specified
                     if cache_dir is None:
                         cache_dir = '/content/drive/MyDrive/AlgoNBA/cache'
-                        print(f"Using Google Drive for cache storage: {cache_dir}")
+                        print("Using Google Drive for cache storage: {}".format(cache_dir))
                 else:
                     print("WARNING: Google Drive mount may have failed. Using session storage instead.")
             except Exception as e:
-                print(f"WARNING: Error setting up Google Drive: {e}")
+                print("WARNING: Error setting up Google Drive: {}".format(e))
                 print("Continuing without Drive integration.")
     except ImportError:
         pass  # Not in Colab environment
@@ -308,15 +308,15 @@ def main():
         
         # Perform the requested cache action
         result = temp_predictor.manage_cache(args.cache_action, args.cache_type)
-        print(f"Cache {args.cache_action} result: {result['status']}")
+        print("Cache {} result: {}".format(args.cache_action, result['status']))
         if 'statistics' in result:
             stats = result['statistics']
-            print(f"Cache entries: {stats['total_entries']}")
-            print(f"Cache size: {stats['total_size_mb']:.2f} MB")
-            print(f"Cache directory: {temp_predictor.cache_manager.cache_dir}")
+            print("Cache entries: {}".format(stats['total_entries']))
+            print("Cache size: {:.2f} MB".format(stats['total_size_mb']))
+            print("Cache directory: {}".format(temp_predictor.cache_manager.cache_dir))
             print("Cache types:")
             for cache_type, count in stats['by_type'].items():
-                print(f"  - {cache_type}: {count} entries")
+                print("  - {}: {} entries".format(cache_type, count))
         
         # Exit after performing cache action
         return
@@ -330,26 +330,28 @@ def main():
             drive_model_path = f"/content/drive/MyDrive/AlgoNBA/models/{os.path.basename(model_dir)}"
             if os.path.exists(drive_model_path):
                 model_dir = drive_model_path
-                print(f"Using model from Google Drive: {model_dir}")
+                print("Using model from Google Drive: {}".format(model_dir))
         
-        print(f"Loading pre-trained models from {model_dir}...")
+        print("Loading pre-trained models from {}...".format(model_dir))
         predictor = EnhancedNBAPredictor.load_models(
             model_dir, 
             use_cache=use_cache,
             cache_dir=cache_dir,
             hardware_optimization=hw_optimization
         )
-        print(f"Models loaded successfully! Cache {cache_status}, Hardware optimizations {hw_status}.")
+        print("Models loaded successfully! Cache {}, Hardware optimizations {}.".format(cache_status, hw_status))
     else:
         # Initialize a new predictor with specified settings
-        print(f"Starting NBA prediction system with {model_type} models...")
-        print(f"Cache system {cache_status}, Hardware optimizations {hw_status}.")
+        print("Starting NBA prediction system with {} models...".format(model_type))
+        print("Cache system {}, Hardware optimizations {}.".format(cache_status, hw_status))
         
         # Pass selective cache components if enabled
         if args.no_cache and selective_cache:
-            print(f"Using selective caching: {'data' if cache_components['data'] else 'no data'}, "
-                 f"{'features' if cache_components['features'] else 'no features'}, "
-                 f"{'models' if cache_components['models'] else 'no models'}")
+            data_status = "data" if cache_components['data'] else "no data"
+            features_status = "features" if cache_components['features'] else "no features"
+            models_status = "models" if cache_components['models'] else "no models"
+            print("Using selective caching: {}, {}, {}".format(
+                data_status, features_status, models_status))
             predictor = EnhancedNBAPredictor(
                 seasons=args.seasons,
                 use_enhanced_models=use_enhanced,
@@ -387,17 +389,17 @@ def main():
                 if is_colab and args.colab_drive:
                     # Use Google Drive for persistence when in Colab
                     save_dir = predictor.save_models("/content/drive/MyDrive/AlgoNBA/models")
-                    print(f"Models saved to Google Drive: {save_dir}")
+                    print("Models saved to Google Drive: {}".format(save_dir))
                 else:
                     # Use standard location
                     save_dir = predictor.save_models()
-                    print(f"Models saved to {save_dir}")
+                    print("Models saved to {}".format(save_dir))
         
         # Print top features
         top_features = predictor.get_feature_importances(10)
         print("\nTop 10 most important features:")
         for feature, importance in top_features.items():
-            print(f"- {feature}: {importance:.4f}")
+            print("- {feature}: {}".format(importance:.4f))
         
         # Example prediction
         print("\nPrediction example:")
@@ -409,9 +411,9 @@ def main():
             model_type='hybrid'
         )
         
-        print(f"Boston Celtics vs Milwaukee Bucks:")
-        print(f"Home win probability: {prediction['home_win_probability']:.2f}")
-        print(f"Confidence: {prediction['confidence']:.2f}")
+        print("Boston Celtics vs Milwaukee Bucks:")
+        print("Home win probability: {:.2f}".format(prediction['home_win_probability']))
+        print("Confidence: {:.2f}".format(prediction['confidence']))
         
         # Additional prediction with different matchup
         prediction2 = predictor.predict_game(
@@ -420,14 +422,14 @@ def main():
             model_type='hybrid'
         )
         
-        print(f"\nLos Angeles Lakers vs Golden State Warriors:")
-        print(f"Home win probability: {prediction2['home_win_probability']:.2f}")
-        print(f"Confidence: {prediction2['confidence']:.2f}")
+        print("\nLos Angeles Lakers vs Golden State Warriors:")
+        print("Home win probability: {:.2f}".format(prediction2['home_win_probability']))
+        print("Confidence: {:.2f}".format(prediction2['confidence']))
         
         print("\nNBA prediction system ready!")
         
     except Exception as e:
-        print(f"Error: {e}")
+        print("Error: {}".format(e))
         sys.exit(1)
 
 
