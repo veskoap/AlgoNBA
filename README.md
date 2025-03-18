@@ -25,6 +25,9 @@ python main.py
 # Use TPU acceleration on Google Colab TPU runtime
 python main.py --use-tpu
 
+# Use TPU acceleration on Google Cloud TPU VMs
+python main.py --use-tpu
+
 # Disable cache for fresh data and models (will be slower due to API fetching)
 python main.py --no-cache
 
@@ -61,15 +64,19 @@ python main.py --colab-drive
 
 # Combine options (TPU acceleration with Drive storage)
 python main.py --use-tpu --colab-drive --save-models
+
+# On Google Cloud TPU VM with quick mode
+python main.py --use-tpu --quick
+```
 ```
 
 ## Hardware Acceleration
 
-### TPU Acceleration (Google Colab)
+### TPU Acceleration (Google Colab and Cloud TPU VMs)
 
 The system now includes specialized optimizations for TPU hardware:
 
-1. **Automatic TPU detection**: Automatically detects and configures TPU v2-8 when available.
+1. **Automatic TPU detection**: Automatically detects and configures TPU v2-8 and Cloud TPU VMs.
 
 2. **Significantly increased batch sizes**: Batch sizes up to 16x larger (1024+) for TPU efficiency.
 
@@ -84,6 +91,25 @@ The system now includes specialized optimizations for TPU hardware:
 7. **Memory preallocation**: Pre-populates TPU memory for optimal training performance.
 
 8. **TPU-friendly model architecture**: Avoids operations that are inefficient on TPU.
+
+9. **Cloud TPU VM support**: Enhanced configuration for Google Cloud TPU VMs with proper environment variables.
+
+#### Google Cloud TPU VM Usage
+
+When running on Google Cloud TPU VMs, use the `--use-tpu` flag for proper TPU initialization:
+
+```bash
+# On Google Cloud TPU VM 
+python main.py --use-tpu
+
+# Combine with other options
+python main.py --use-tpu --quick --save-models
+```
+
+The system now sets the following environment variables automatically:
+- `PJRT_DEVICE=TPU` for proper TPU device detection
+- `XLA_DEVICE=TPU` as an alternative initialization path
+- `XLA_USE_BF16=1` for bfloat16 precision on TPU v2/v3
 
 **Note**: If you encounter PyTorch CUDA/NCCL errors on Google Cloud TPU VMs, use one of these solutions:
 ```bash
@@ -514,6 +540,7 @@ python main.py --cache-dir /path/to/custom/cache
 | `--cache-dir` | Specify custom directory for cache storage |
 | `--no-hardware-optimization` | Disable hardware-specific optimizations (M1, CUDA, etc.) |
 | `--colab-drive` | Use Google Drive for storage when in Colab environment |
+| `--use-tpu` | Enable TPU acceleration and proper environment configuration (for Google Colab TPU runtime and Cloud TPU VMs) |
 
 ### Caching System
 

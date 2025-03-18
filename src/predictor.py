@@ -145,32 +145,63 @@ class EnhancedNBAPredictor:
         
         # Check for TPU availability first (highest priority)
         try:
+            # Set environment variables before importing torch_xla
+            os.environ['PJRT_DEVICE'] = 'TPU'
+            os.environ['XLA_USE_BF16'] = '1'  # Enable bfloat16 for TPU v2/v3
+            
             import torch_xla
             import torch_xla.core.xla_model as xm
             
-            # Check if TPU is available
-            devices = xm.get_xla_supported_devices()
-            if devices and 'TPU' in devices[0]:
-                print(f"TPU detected: {devices[0]}")
-                self.device = xm.xla_device()
-                self.is_tpu = True
-                
-                # Set TPU-specific optimization flags
-                os.environ['XLA_USE_BF16'] = '1'  # Enable bfloat16 for TPU v2/v3
-                
-                # Set flags for TPU optimization
-                import torch_xla.debug.metrics as met
-                met.set_metrics_enabled(True)  # Enable metrics collection
-                
-                # Log TPU information
-                print(f"Using TPU device: {self.device}")
-                print("TPU optimizations enabled: bfloat16 precision, metrics collection")
-                
-                return  # TPU setup complete, no need to check other hardware
-            else:
-                self.is_tpu = False
+            try:
+                # Check if TPU is available
+                devices = xm.get_xla_supported_devices()
+                if devices and 'TPU' in devices[0]:
+                    print(f"TPU detected: {devices[0]}")
+                    self.device = xm.xla_device()
+                    self.is_tpu = True
+                    
+                    # Set flags for TPU optimization
+                    import torch_xla.debug.metrics as met
+                    met.set_metrics_enabled(True)  # Enable metrics collection
+                    
+                    # Log TPU information
+                    print(f"Using TPU device: {self.device}")
+                    print("TPU optimizations enabled: bfloat16 precision, metrics collection")
+                    
+                    return  # TPU setup complete, no need to check other hardware
+                else:
+                    self.is_tpu = False
+            except RuntimeError as e:
+                # Handle the TPU topology error specifically
+                if "Failed to get global TPU topology" in str(e):
+                    print("TPU device found but topology query failed, trying alternative initialization...")
+                    # The TPU is likely available but needs different initialization
+                    # Set XLA_DEVICE environment variable as an alternative
+                    os.environ['XLA_DEVICE'] = 'TPU'
+                    
+                    try:
+                        # Create device directly without querying topology
+                        self.device = xm.xla_device()
+                        self.is_tpu = True
+                        
+                        # Set flags for TPU optimization
+                        import torch_xla.debug.metrics as met
+                        met.set_metrics_enabled(True)  # Enable metrics collection
+                        
+                        print(f"Successfully created TPU device via alternative method: {self.device}")
+                        print("TPU optimizations enabled: bfloat16 precision, metrics collection")
+                        
+                        return  # TPU setup complete
+                    except Exception as device_error:
+                        print(f"Failed to create TPU device: {device_error}")
+                        self.is_tpu = False
+                else:
+                    # Some other runtime error
+                    print(f"TPU runtime error: {e}")
+                    self.is_tpu = False
         except ImportError:
             # torch_xla not available
+            print("torch_xla package not available, TPU support disabled")
             self.is_tpu = False
         
         # Apply Apple Silicon (M1/M2) optimizations if TPU not available
