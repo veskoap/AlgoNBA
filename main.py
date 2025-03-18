@@ -237,7 +237,7 @@ def main():
     
     # Status reporting
     if args.no_cache and selective_cache:
-        cache_status = f"partially enabled (only {selective_cache})"
+        cache_status = "partially enabled (only {})".format(selective_cache)
     else:
         cache_status = "disabled" if args.no_cache else "enabled"
     
@@ -327,7 +327,7 @@ def main():
         model_dir = args.load_models
         if is_colab and args.colab_drive and not model_dir.startswith('/content/drive'):
             # Check if model exists in Drive
-            drive_model_path = f"/content/drive/MyDrive/AlgoNBA/models/{os.path.basename(model_dir)}"
+            drive_model_path = "/content/drive/MyDrive/AlgoNBA/models/{}".format(os.path.basename(model_dir))
             if os.path.exists(drive_model_path):
                 model_dir = drive_model_path
                 print("Using model from Google Drive: {}".format(model_dir))
