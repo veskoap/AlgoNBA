@@ -634,9 +634,6 @@ class EnhancedDeepModelTrainer:
                         except ImportError as e:
                             print(f"Could not import required TPU modules: {e}")
                             self.is_tpu = False
-                except ImportError as e:
-                    print(f"Could not import required TPU modules: {e}")
-                    self.is_tpu = False
                 else:
                     print("TPU capability detected but TPU use not requested. Run with --use-tpu and ALGONBA_FORCE_TPU=1 to use TPU.")
                     self.is_tpu = False
