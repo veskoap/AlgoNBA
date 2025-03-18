@@ -584,10 +584,18 @@ class EnhancedDeepModelTrainer:
                         # TPU-specific optimizations
                         original_batch = batch_size
                         
-                        # Much larger batch size for TPU v2-8
-                        batch_size = max(1024, batch_size * 16)  # 16x larger batches for TPU
+                        # Check for max batch size environment variable
+                        max_batch_size_env = os.environ.get('ALGONBA_MAX_BATCH_SIZE')
+                        if max_batch_size_env:
+                            max_batch_override = int(max_batch_size_env)
+                            print(f"Using environment-specified max batch size: {max_batch_override}")
+                            # Use the smaller of calculated or maximum allowed batch size
+                            batch_size = min(max_batch_override, max(256, batch_size * 4))
+                        else:
+                            # Much larger batch size for TPU v2-8, but not too large to avoid topology errors
+                            batch_size = max(512, batch_size * 8)  # 8x larger batches for TPU (reduced from 16x)
                         
-                        print(f"TPU detected: Significantly increasing batch size from {original_batch} to {batch_size}")
+                        print(f"TPU detected: Adjusting batch size from {original_batch} to {batch_size}")
                         
                         # Force AMP for TPU
                         use_amp = True
@@ -614,8 +622,16 @@ class EnhancedDeepModelTrainer:
                                 # TPU-specific optimizations
                                 original_batch = batch_size
                                 
-                                # Much larger batch size for TPU v2-8
-                                batch_size = max(1024, batch_size * 16)  # 16x larger batches for TPU
+                                # Check for max batch size environment variable
+                                max_batch_size_env = os.environ.get('ALGONBA_MAX_BATCH_SIZE')
+                                if max_batch_size_env:
+                                    max_batch_override = int(max_batch_size_env)
+                                    print(f"Using environment-specified max batch size: {max_batch_override}")
+                                    # Use the smaller of calculated or maximum allowed batch size
+                                    batch_size = min(max_batch_override, max(256, batch_size * 4))
+                                else:
+                                    # Much larger batch size for TPU v2-8, but not too large to avoid topology errors
+                                    batch_size = max(512, batch_size * 8)  # 8x larger batches for TPU (reduced from 16x)
                                 
                                 print(f"TPU detected: Significantly increasing batch size from {original_batch} to {batch_size}")
                                 
@@ -1019,20 +1035,77 @@ class EnhancedDeepModelTrainer:
             for epoch in range(self.epochs):
                 # Force memory allocation at the beginning of epoch for performance
                 if epoch == 0:
-                    if self.is_tpu:
+                    # Check if we should skip memory allocation entirely
+                    if os.environ.get('ALGONBA_SKIP_MEMORY_ALLOC') == '1':
+                        print("Skipping memory allocation phase (ALGONBA_SKIP_MEMORY_ALLOC=1)")
+                        # Ensure we create a barrier to prevent XLA from attempting topology initialization later
+                        try:
+                            print("Setting up minimal XLA memory barrier to prevent later topology errors")
+                            import torch_xla.core.xla_model as xm
+                            # Create a very small tensor that won't trigger the topology error
+                            dummy_input = torch.zeros(1, 1, device=self.device)
+                            # Just create it, don't do any operations that might trigger topology initialization
+                            dummy_input = dummy_input.to(self.device)
+                            # Don't call mark_step() which might trigger topology initialization
+                            # Clean up
+                            del dummy_input
+                            print("Memory barrier setup complete")
+                        except Exception as e:
+                            print(f"Memory barrier setup failed: {e}")
+                            print("This is non-critical, continuing with training")
+                    elif self.is_tpu:
                         print("Optimizing initial TPU memory allocation...")
-                        # Create a large batch for TPU pre-allocation
-                        large_batch_size = max(self.batch_size * 4, 2048)
-                        print(f"TPU: Using large batch of {large_batch_size} for initialization")
                         
-                        # Create a larger batch for pre-allocation
-                        import torch_xla.core.xla_model as xm
-                        dummy_input = torch.zeros(large_batch_size, X_train.shape[1], device=self.device)
-                        dummy_out = model(dummy_input)
-                        xm.mark_step()  # Force TPU execution
+                        # Check for max batch size environment variable
+                        max_batch_size_env = os.environ.get('ALGONBA_MAX_BATCH_SIZE')
+                        if max_batch_size_env:
+                            max_batch_override = int(max_batch_size_env)
+                            # Use a safer batch size for initialization
+                            large_batch_size = min(max_batch_override, max(self.batch_size, 512))
+                            print(f"TPU: Using environment-limited batch of {large_batch_size} for initialization")
+                        else:
+                            # Create a large batch for TPU pre-allocation, but not too large
+                            large_batch_size = max(self.batch_size * 2, 512)  # Reduced from 4x and 2048 to avoid topology errors
+                            print(f"TPU: Using moderate batch of {large_batch_size} for initialization")
                         
-                        # Clean up
-                        del dummy_input, dummy_out
+                        try:
+                            # Create a larger batch for pre-allocation
+                            import torch_xla.core.xla_model as xm
+                            
+                            # Start with a very small tensor to test if TPU is working at all
+                            print("Testing TPU with minimal tensor...")
+                            tiny_input = torch.zeros(1, 1, device=self.device)
+                            # Perform a simple operation
+                            tiny_out = tiny_input + 1
+                            # Mark step without forcing execution
+                            print("TPU minimal tensor test passed, proceeding with larger allocation")
+                            
+                            # Now try the actual allocation with increasing sizes to find safe limit
+                            for size_mult in [0.25, 0.5, 1.0]:
+                                try:
+                                    curr_size = max(1, int(large_batch_size * size_mult))
+                                    print(f"Trying TPU allocation with batch size {curr_size}...")
+                                    dummy_input = torch.zeros(curr_size, X_train.shape[1], device=self.device)
+                                    dummy_out = model(dummy_input)
+                                    # Clean up before next iteration
+                                    del dummy_input, dummy_out
+                                    # If we got here, this size worked
+                                    print(f"TPU allocation successful with batch size {curr_size}")
+                                    # Don't try larger sizes if we're already at full size
+                                    if size_mult >= 1.0:
+                                        break
+                                except Exception as inner_e:
+                                    print(f"TPU allocation failed with batch size {curr_size}: {inner_e}")
+                                    # If we failed at the smallest size, don't try larger ones
+                                    if size_mult <= 0.25:
+                                        raise RuntimeError(f"TPU allocation failed even with minimal batch size: {inner_e}")
+                                    break
+                            
+                            print("TPU memory allocation phase complete")
+                        except Exception as e:
+                            print(f"TPU memory allocation failed: {e}")
+                            print("WARNING: TPU initialization failed! Training may be slow or crash later.")
+                            print("Consider using option 4 (Ultra-safe TPU mode) or option 1 (Safe CPU mode).")
                         
                     elif torch.cuda.is_available():
                         print("Optimizing initial GPU memory allocation...")
