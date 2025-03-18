@@ -181,7 +181,8 @@ class EnhancedNBAPredictor:
                                 if os.environ.get('ALGONBA_SAFE_TPU') == '1':
                                     print("Using safe TPU initialization in predictor (ALGONBA_SAFE_TPU=1)")
                                     # Don't create the device or import xm which crashes
-                                    self.device = 'tpu-safe-mode'
+                                    # Use CPU device instead of 'tpu-safe-mode' string
+                                    self.device = 'cpu'
                                     self.is_tpu = True
                                     
                                     # Set BF16 but avoid PJRT which causes the crash
