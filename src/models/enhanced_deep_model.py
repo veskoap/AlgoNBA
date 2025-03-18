@@ -2,6 +2,7 @@
 Enhanced deep learning model for NBA prediction with residual connections
 and advanced architecture for improved accuracy.
 """
+import os
 import numpy as np
 import pandas as pd
 import torch
@@ -551,41 +552,61 @@ class EnhancedDeepModelTrainer:
         """
         # Check for TPU
         self.is_tpu = False
-        try:
-            import torch_xla.core.xla_model as xm
-            import torch_xla.distributed.parallel_loader as pl
-            
-            devices = xm.get_xla_supported_devices()
-            if devices and 'TPU' in devices[0]:
-                self.device = xm.xla_device()
-                self.is_tpu = True
-                print(f"TPU detected: {self.device}")
-                
-                # TPU-specific optimizations
-                original_batch = batch_size
-                
-                # Much larger batch size for TPU v2-8
-                batch_size = max(1024, batch_size * 16)  # 16x larger batches for TPU
-                
-                print(f"TPU detected: Significantly increasing batch size from {original_batch} to {batch_size}")
-                
-                # Force AMP for TPU
-                use_amp = True
-                
-                # TPU prefers different scheduler types
-                if scheduler_type == "cosine":
-                    print("Adjusting scheduler for TPU: using one_cycle instead of cosine")
-                    scheduler_type = "one_cycle"
-                
-                # Adjust worker threads for TPU
-                num_workers = 4  # TPU works better with fewer workers
-            else:
-                # Not a TPU environment
-                self.is_tpu = False
-                
-        except ImportError:
-            # torch_xla not available
+        
+        # Check if TPU is explicitly disabled via environment variable
+        if os.environ.get('ALGONBA_DISABLE_TPU') == '1':
+            print("TPU detection disabled in EnhancedDeepModelTrainer by ALGONBA_DISABLE_TPU=1")
             self.is_tpu = False
+        else:
+            try:
+                # Check if torch_xla is available at all
+                import torch_xla
+                
+                # Only attempt TPU initialization if explicitly requested
+                force_tpu = os.environ.get('ALGONBA_FORCE_TPU') == '1'
+                if force_tpu:
+                    try:
+                        import torch_xla.core.xla_model as xm
+                        import torch_xla.distributed.parallel_loader as pl
+                        
+                        print("Attempting to use TPU with direct initialization (forced mode)")
+                        try:
+                            # Create device directly instead of querying topology
+                            self.device = xm.xla_device()
+                            self.is_tpu = True
+                            print(f"TPU device created: {self.device}")
+                            
+                            # TPU-specific optimizations
+                            original_batch = batch_size
+                            
+                            # Much larger batch size for TPU v2-8
+                            batch_size = max(1024, batch_size * 16)  # 16x larger batches for TPU
+                            
+                            print(f"TPU detected: Significantly increasing batch size from {original_batch} to {batch_size}")
+                            
+                            # Force AMP for TPU
+                            use_amp = True
+                            
+                            # TPU prefers different scheduler types
+                            if scheduler_type == "cosine":
+                                print("Adjusting scheduler for TPU: using one_cycle instead of cosine")
+                                scheduler_type = "one_cycle"
+                            
+                            # Adjust worker threads for TPU
+                            num_workers = 4  # TPU works better with fewer workers
+                        except Exception as e:
+                            print(f"Failed to create TPU device: {e}")
+                            self.is_tpu = False
+                    except ImportError as e:
+                        print(f"Could not import required TPU modules: {e}")
+                        self.is_tpu = False
+                else:
+                    print("TPU capability detected but TPU use not requested. Run with --use-tpu and ALGONBA_FORCE_TPU=1 to use TPU.")
+                    self.is_tpu = False
+            except ImportError:
+                # torch_xla not available
+                print("torch_xla package not available, TPU support disabled in deep model")
+                self.is_tpu = False
             
         # Enhanced batch size settings for A100 GPU if not on TPU
         if not self.is_tpu and torch.cuda.is_available():
