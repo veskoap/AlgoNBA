@@ -96,20 +96,34 @@ The system now includes specialized optimizations for TPU hardware:
 
 #### Google Cloud TPU VM Usage
 
-When running on Google Cloud TPU VMs, use the `--use-tpu` flag for proper TPU initialization:
+When running on Google Cloud TPU VMs, use the included helper script for a safer experience:
 
 ```bash
-# On Google Cloud TPU VM 
-python main.py --use-tpu
+# Run the TPU VM helper script
+./tpu_run.sh
 
-# Combine with other options
-python main.py --use-tpu --quick --save-models
+# You can pass additional arguments
+./tpu_run.sh --quick --save-models
 ```
 
-The system now sets the following environment variables automatically:
-- `PJRT_DEVICE=TPU` for proper TPU device detection
-- `XLA_DEVICE=TPU` as an alternative initialization path
-- `XLA_USE_BF16=1` for bfloat16 precision on TPU v2/v3
+The helper script provides three execution modes:
+1. **Safe mode (default)**: Runs in CPU-only mode, disabling TPU/GPU for guaranteed stability
+2. **TPU detection mode**: Detects TPU but uses CPU for computation
+3. **TPU forced mode**: Attempts to use TPU acceleration (may crash on some TPU VM configurations)
+
+For advanced usage, you can also set these environment variables:
+- `ALGONBA_DISABLE_TPU=1`: Completely disables TPU detection and usage
+- `ALGONBA_FORCE_TPU=1`: Forces TPU usage with direct device creation
+
+```bash
+# Force CPU-only mode
+export ALGONBA_DISABLE_TPU=1
+python main.py
+
+# Force TPU mode (may crash)
+export ALGONBA_FORCE_TPU=1
+python main.py --use-tpu
+```
 
 **Note**: If you encounter PyTorch CUDA/NCCL errors on Google Cloud TPU VMs, use one of these solutions:
 ```bash

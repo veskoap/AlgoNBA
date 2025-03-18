@@ -145,63 +145,65 @@ class EnhancedNBAPredictor:
         
         # Check for TPU availability first (highest priority)
         try:
-            # Set environment variables before importing torch_xla
-            os.environ['PJRT_DEVICE'] = 'TPU'
-            os.environ['XLA_USE_BF16'] = '1'  # Enable bfloat16 for TPU v2/v3
-            
-            import torch_xla
-            import torch_xla.core.xla_model as xm
-            
-            try:
-                # Check if TPU is available
-                devices = xm.get_xla_supported_devices()
-                if devices and 'TPU' in devices[0]:
-                    print(f"TPU detected: {devices[0]}")
-                    self.device = xm.xla_device()
-                    self.is_tpu = True
+            # Check if we should skip TPU detection completely (safer option)
+            if os.environ.get('ALGONBA_DISABLE_TPU') == '1':
+                print("TPU detection disabled by ALGONBA_DISABLE_TPU=1 environment variable")
+                self.is_tpu = False
+                # Skip TPU detection entirely
+            else:
+                # Try a more conservative TPU detection approach
+                try:
+                    # Import torch_xla but don't set any environment variables initially
+                    import torch_xla
+                    has_torch_xla = True
+                    print("torch_xla package detected")
                     
-                    # Set flags for TPU optimization
-                    import torch_xla.debug.metrics as met
-                    met.set_metrics_enabled(True)  # Enable metrics collection
-                    
-                    # Log TPU information
-                    print(f"Using TPU device: {self.device}")
-                    print("TPU optimizations enabled: bfloat16 precision, metrics collection")
-                    
-                    return  # TPU setup complete, no need to check other hardware
-                else:
+                    # Default to not using TPU
                     self.is_tpu = False
-            except RuntimeError as e:
-                # Handle the TPU topology error specifically
-                if "Failed to get global TPU topology" in str(e):
-                    print("TPU device found but topology query failed, trying alternative initialization...")
-                    # The TPU is likely available but needs different initialization
-                    # Set XLA_DEVICE environment variable as an alternative
-                    os.environ['XLA_DEVICE'] = 'TPU'
                     
+                    # Check if this is called with --use-tpu flag
+                    tpu_explicitly_requested = False
                     try:
-                        # Create device directly without querying topology
-                        self.device = xm.xla_device()
-                        self.is_tpu = True
+                        import sys
+                        tpu_explicitly_requested = '--use-tpu' in sys.argv
+                    except Exception:
+                        pass
+                    
+                    if tpu_explicitly_requested:
+                        print("TPU explicitly requested but will run in CPU-only mode for stability")
+                        print("To force TPU usage, set environment variable ALGONBA_FORCE_TPU=1")
                         
-                        # Set flags for TPU optimization
-                        import torch_xla.debug.metrics as met
-                        met.set_metrics_enabled(True)  # Enable metrics collection
-                        
-                        print(f"Successfully created TPU device via alternative method: {self.device}")
-                        print("TPU optimizations enabled: bfloat16 precision, metrics collection")
-                        
-                        return  # TPU setup complete
-                    except Exception as device_error:
-                        print(f"Failed to create TPU device: {device_error}")
-                        self.is_tpu = False
-                else:
-                    # Some other runtime error
-                    print(f"TPU runtime error: {e}")
+                        # Only try TPU if explicitly forced via environment variable
+                        if os.environ.get('ALGONBA_FORCE_TPU') == '1':
+                            print("Force TPU mode enabled by ALGONBA_FORCE_TPU=1 environment variable")
+                            try:
+                                # Set required environment variables
+                                os.environ['PJRT_DEVICE'] = 'TPU'
+                                os.environ['XLA_USE_BF16'] = '1'
+                                
+                                # Import needed modules
+                                import torch_xla.core.xla_model as xm
+                                
+                                # Create device directly without querying topology
+                                self.device = xm.xla_device()
+                                self.is_tpu = True
+                                
+                                # Log TPU information
+                                print(f"Using TPU device: {self.device}")
+                                print("TPU optimizations enabled via direct initialization")
+                            except Exception as e:
+                                print(f"Failed to initialize TPU, falling back to CPU: {e}")
+                                self.is_tpu = False
+                    else:
+                        print("TPU capability detected but not enabled (use --use-tpu flag)")
+                except ImportError:
+                    has_torch_xla = False
+                    print("torch_xla package not available, TPU support disabled")
                     self.is_tpu = False
-        except ImportError:
-            # torch_xla not available
-            print("torch_xla package not available, TPU support disabled")
+        except Exception as e:
+            # Catch any unexpected errors in TPU detection
+            print(f"Error during TPU setup: {e}")
+            print("Falling back to CPU for safety")
             self.is_tpu = False
         
         # Apply Apple Silicon (M1/M2) optimizations if TPU not available

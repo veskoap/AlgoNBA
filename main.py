@@ -67,41 +67,40 @@ def setup_tpu():
     Setup TPU support if available in the environment.
     Returns True if TPU is available and setup, False otherwise.
     """
+    # Check if we should skip TPU detection completely (safer option)
+    if os.environ.get('ALGONBA_DISABLE_TPU') == '1':
+        print("TPU detection disabled by ALGONBA_DISABLE_TPU=1 environment variable")
+        return False
+
     try:
-        # Set environment variables before importing torch_xla
-        os.environ['PJRT_DEVICE'] = 'TPU'
-        os.environ['XLA_USE_BF16'] = '1'  # Enable bfloat16 for TPU v2/v3
-        
+        # Try a more conservative TPU detection approach
         import torch_xla
-        import torch_xla.core.xla_model as xm
+        print("torch_xla package detected")
+
+        # Default to not using TPU for safety
+        print("TPU capability detected but will run in CPU-only mode for stability")
+        print("To force TPU usage, set environment variable ALGONBA_FORCE_TPU=1")
         
-        try:
-            # Check if TPU is available
-            devices = xm.get_xla_supported_devices()
-            if devices and 'TPU' in devices[0]:
-                print(f"TPU detected: {devices[0]}")
-                return True
-            return False
-        except RuntimeError as e:
-            # Handle the TPU topology error specifically
-            if "Failed to get global TPU topology" in str(e):
-                print("TPU device found but topology query failed, trying alternative initialization...")
-                # The TPU is likely available but needs different initialization
-                # XLA_DEVICE environment variable is an alternative to get_xla_supported_devices
-                os.environ['XLA_DEVICE'] = 'TPU'
+        # Only try TPU if explicitly forced via environment variable
+        if os.environ.get('ALGONBA_FORCE_TPU') == '1':
+            print("Force TPU mode enabled by ALGONBA_FORCE_TPU=1 environment variable")
+            try:
+                # Set required environment variables
+                os.environ['PJRT_DEVICE'] = 'TPU'
+                os.environ['XLA_USE_BF16'] = '1'
                 
-                # Check if we can create a device directly without querying topology
-                try:
-                    device = xm.xla_device()
-                    print(f"Successfully created TPU device: {device}")
-                    return True
-                except Exception as device_error:
-                    print(f"Failed to create TPU device: {device_error}")
-                    return False
-            else:
-                # Some other runtime error
-                print(f"TPU runtime error: {e}")
+                # Import needed modules
+                import torch_xla.core.xla_model as xm
+                
+                # Create device directly
+                device = xm.xla_device()
+                print(f"Successfully created TPU device: {device}")
+                return True
+            except Exception as e:
+                print(f"Failed to initialize TPU, falling back to CPU: {e}")
                 return False
+        else:
+            return False
     except ImportError:
         print("torch_xla package not available, TPU support disabled")
         return False
