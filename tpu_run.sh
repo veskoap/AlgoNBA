@@ -2,6 +2,28 @@
 
 # Script to run AlgoNBA on TPU VMs safely
 
+# Check if dependencies are installed
+check_dependencies() {
+    echo "Checking dependencies..."
+    PACKAGES="pandas numpy scikit-learn xgboost lightgbm torch nba_api geopy pytz joblib tqdm psutil requests"
+    MISSING=""
+    
+    for pkg in $PACKAGES; do
+        python -c "import $pkg" 2>/dev/null
+        if [ $? -ne 0 ]; then
+            MISSING="$MISSING $pkg"
+        fi
+    done
+    
+    if [ ! -z "$MISSING" ]; then
+        echo "Missing dependencies:$MISSING"
+        echo "Installing missing dependencies..."
+        pip install $MISSING
+    else
+        echo "All dependencies installed."
+    fi
+}
+
 echo "AlgoNBA TPU VM Runner Script"
 echo "============================"
 echo ""
@@ -13,8 +35,12 @@ echo "2. TPU detection mode (will detect but not use TPU)"
 echo "3. TPU forced mode (will attempt to use TPU, may crash)"
 echo "4. Ultra-safe TPU mode (avoids PyTorch XLA initialization completely)"
 echo "5. No-memory-allocation TPU mode (skips large tensor initialization)"
+echo "6. Install dependencies only (doesn't run the model)"
 echo ""
-read -p "Enter choice [1-5] (default: 1): " choice
+read -p "Enter choice [1-6] (default: 1): " choice
+
+# Check and install dependencies
+check_dependencies
 
 case $choice in
     5)
@@ -64,6 +90,23 @@ case $choice in
         PYTHONPATH=$(echo $PYTHONPATH | tr ':' '\n' | grep -v "torch_xla" | tr '\n' ':')
         export PYTHONPATH
         python main.py "$@"
+        ;;
+    6)
+        echo ""
+        echo "Installing dependencies only"
+        echo "Installing all required packages from requirements.txt..."
+        
+        # First install PyTorch for TPU
+        echo "Installing PyTorch for TPU..."
+        pip install torch==1.13.1
+        pip install torch_xla[tpu]==1.13.1
+        
+        # Then install the rest of the requirements
+        echo "Installing other dependencies..."
+        pip install -r requirements.txt
+        
+        echo "Dependencies installation complete."
+        exit 0
         ;;
     *)
         # Default or option 1
