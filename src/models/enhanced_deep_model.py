@@ -835,7 +835,20 @@ class EnhancedDeepModelTrainer:
                 
                 print(f"Fold {fold}: Train end date: {train_max}, Validation start date: {val_min}")
                 if train_max >= val_min:
-                    print(f"WARNING: Potential temporal overlap in fold {fold}!")
+                    # Add one day buffer to ensure strict temporal separation
+                    val_dates = pd.to_datetime(val_dates)
+                    buffer_date = pd.to_datetime(train_max) + pd.Timedelta(days=1)
+                    
+                    # Filter validation indices to only include dates after buffer date
+                    valid_val_idx = val_idx[val_dates > buffer_date]
+                    
+                    if len(valid_val_idx) > 0:
+                        # Replace validation indices with temporally safe subset
+                        val_idx = valid_val_idx
+                        val_min = val_dates[val_dates > buffer_date].min()
+                        print(f"Fixed temporal overlap. New validation start date: {val_min}")
+                    else:
+                        print(f"WARNING: Unable to fix temporal overlap in fold {fold} - insufficient data")
                 else:
                     print(f"Fold {fold} temporal integrity verified")
                     

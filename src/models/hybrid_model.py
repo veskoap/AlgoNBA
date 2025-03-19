@@ -87,7 +87,28 @@ class HybridModel:
             opt_start_date = X_weight_opt['GAME_DATE'].min()
             print(f"Training set end date: {train_end_date}, Weight optimization start date: {opt_start_date}")
             if train_end_date >= opt_start_date:
-                print("WARNING: Potential temporal overlap between training and weight optimization sets!")
+                print("WARNING: Detected temporal overlap between training and weight optimization sets!")
+                # Convert to datetime for proper temporal operations
+                X_weight_opt['GAME_DATE'] = pd.to_datetime(X_weight_opt['GAME_DATE'])
+                train_end_datetime = pd.to_datetime(train_end_date)
+                
+                # Add one day buffer to ensure strict temporal separation
+                buffer_date = train_end_datetime + pd.Timedelta(days=1)
+                
+                # Filter weight optimization set to only include data after buffer date
+                X_weight_opt = X_weight_opt[X_weight_opt['GAME_DATE'] > buffer_date].copy()
+                
+                if len(X_weight_opt) > 0:
+                    print(f"Fixed temporal overlap. New weight optimization set has {len(X_weight_opt)} samples")
+                    print(f"New weight optimization start date: {X_weight_opt['GAME_DATE'].min()}")
+                else:
+                    print("ERROR: Unable to fix temporal overlap - insufficient data for weight optimization!")
+                    # Fall back to using a small portion of training data (not ideal but better than nothing)
+                    X_train = X_train.sort_values('GAME_DATE')
+                    split_idx = int(len(X_train) * 0.8)
+                    X_weight_opt = X_train.iloc[split_idx:].copy()
+                    X_train = X_train.iloc[:split_idx].copy()
+                    print(f"Created fallback split: Training data: {len(X_train)}, Weight optimization data: {len(X_weight_opt)}")
             else:
                 print("Temporal integrity verified: Training data strictly precedes weight optimization data")
         else:

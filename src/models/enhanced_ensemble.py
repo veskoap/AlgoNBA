@@ -235,7 +235,26 @@ class NBAEnhancedEnsembleModel:
             test_start_date = X_test['GAME_DATE'].min()
             print(f"Training set end date: {train_end_date}, Test set start date: {test_start_date}")
             if train_end_date >= test_start_date:
-                print("WARNING: Potential temporal overlap between training and test sets!")
+                print("WARNING: Detected temporal overlap between training and test sets!")
+                # Convert to datetime for proper temporal operations
+                X_train_val['GAME_DATE'] = pd.to_datetime(X_train_val['GAME_DATE'])
+                X_test['GAME_DATE'] = pd.to_datetime(X_test['GAME_DATE'])
+                train_end_datetime = pd.to_datetime(train_end_date)
+                
+                # Add one day buffer to ensure strict temporal separation
+                buffer_date = train_end_datetime + pd.Timedelta(days=1)
+                
+                # Filter test set to only include data after buffer date
+                X_test_fixed = X_test[X_test['GAME_DATE'] > buffer_date].copy()
+                
+                if len(X_test_fixed) > 0:
+                    X_test = X_test_fixed
+                    self.X_test = X_test
+                    self.y_test = X_test['TARGET'] if 'TARGET' in X_test.columns else None
+                    print(f"Fixed temporal overlap. New test set has {len(X_test)} samples")
+                    print(f"New test start date: {X_test['GAME_DATE'].min()}")
+                else:
+                    print("WARNING: Unable to fix temporal overlap - insufficient data in test set")
             else:
                 print("Temporal integrity verified: Training data strictly precedes test data")
         else:
