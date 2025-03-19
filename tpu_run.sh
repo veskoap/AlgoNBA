@@ -8,8 +8,19 @@ check_dependencies() {
     PACKAGES="pandas numpy scikit-learn xgboost lightgbm torch nba_api geopy pytz joblib tqdm psutil requests"
     MISSING=""
     
+    # First try to find the right Python version
+    if command -v python3.8 &> /dev/null; then
+        PYTHON_CMD="python3.8"
+    elif command -v python3 &> /dev/null; then
+        PYTHON_CMD="python3"
+    else
+        PYTHON_CMD="python"
+    fi
+    
+    echo "Using Python command: $PYTHON_CMD"
+    
     for pkg in $PACKAGES; do
-        python -c "import $pkg" 2>/dev/null
+        $PYTHON_CMD -c "import $pkg" 2>/dev/null
         if [ $? -ne 0 ]; then
             MISSING="$MISSING $pkg"
         fi
@@ -18,7 +29,17 @@ check_dependencies() {
     if [ ! -z "$MISSING" ]; then
         echo "Missing dependencies:$MISSING"
         echo "Installing missing dependencies..."
-        pip install $MISSING
+        # Try to find the right pip version
+        if command -v pip3.8 &> /dev/null; then
+            PIP_CMD="pip3.8"
+        elif command -v pip3 &> /dev/null; then
+            PIP_CMD="pip3"
+        else
+            PIP_CMD="pip"
+        fi
+        
+        echo "Using pip command: $PIP_CMD"
+        $PIP_CMD install $MISSING
     else
         echo "All dependencies installed."
     fi
@@ -55,14 +76,15 @@ case $choice in
         export ALGONBA_MAX_BATCH_SIZE=16
         export ALGONBA_SKIP_MEMORY_ALLOC=1
         # Run with quick mode to reduce memory requirements
-        python main.py --use-tpu --quick "$@"
+        # Try to use Python 3.8 explicitly since that's where the packages are installed
+        python3.8 main.py --use-tpu --quick "$@" || python3 main.py --use-tpu --quick "$@" || python main.py --use-tpu --quick "$@"
         ;;
     2)
         echo ""
         echo "Running in TPU detection mode"
         echo "TPU will be detected but not used"
-        # Use original command line args
-        python main.py "$@"
+        # Use original command line args - try different Python versions
+        python3.8 main.py "$@" || python3 main.py "$@" || python main.py "$@"
         ;;
     3)
         echo ""
@@ -75,7 +97,8 @@ case $choice in
         export ALGONBA_SAFE_TPU=1
         # Use very small batch size to avoid topology error
         export ALGONBA_MAX_BATCH_SIZE=128
-        python main.py --use-tpu --quick "$@"
+        # Try different Python versions
+        python3.8 main.py --use-tpu --quick "$@" || python3 main.py --use-tpu --quick "$@" || python main.py --use-tpu --quick "$@"
         ;;
     4)
         echo ""
@@ -89,21 +112,33 @@ case $choice in
         # Ensure Python doesn't try to load torch_xla at all
         PYTHONPATH=$(echo $PYTHONPATH | tr ':' '\n' | grep -v "torch_xla" | tr '\n' ':')
         export PYTHONPATH
-        python main.py "$@"
+        # Try different Python versions
+        python3.8 main.py "$@" || python3 main.py "$@" || python main.py "$@"
         ;;
     6)
         echo ""
         echo "Installing dependencies only"
         echo "Installing all required packages from requirements.txt..."
         
+        # Find the right pip version
+        if command -v pip3.8 &> /dev/null; then
+            PIP_CMD="pip3.8"
+        elif command -v pip3 &> /dev/null; then
+            PIP_CMD="pip3"
+        else
+            PIP_CMD="pip"
+        fi
+        
+        echo "Using pip command: $PIP_CMD"
+        
         # First install PyTorch for TPU
         echo "Installing PyTorch for TPU..."
-        pip install torch==1.13.1
-        pip install torch_xla[tpu]==1.13.1
+        $PIP_CMD install torch==1.13.1
+        $PIP_CMD install torch_xla[tpu]==1.13.1
         
         # Then install the rest of the requirements
         echo "Installing other dependencies..."
-        pip install -r requirements.txt
+        $PIP_CMD install -r requirements.txt
         
         echo "Dependencies installation complete."
         exit 0
@@ -116,7 +151,7 @@ case $choice in
         # Disable all GPU/TPU devices
         export CUDA_VISIBLE_DEVICES=""
         export ALGONBA_DISABLE_TPU=1
-        # Use original command line args
-        python main.py "$@"
+        # Use original command line args - try different Python versions
+        python3.8 main.py "$@" || python3 main.py "$@" || python main.py "$@"
         ;;
 esac
