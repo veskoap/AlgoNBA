@@ -60,7 +60,7 @@ echo ""
 echo "Select run mode:"
 echo "1. Safe mode (CPU only, most reliable)"
 echo "2. TPU detection mode (will detect but not use TPU)"
-echo "3. TPU forced mode (will attempt to use TPU, may crash)"
+echo "3. TPU forced mode with FULL PROCESSING (will attempt to use TPU with complete model training)"
 echo "4. Ultra-safe TPU mode (avoids PyTorch XLA initialization completely)"
 echo "5. No-memory-allocation TPU mode (skips large tensor initialization)"
 echo "6. Install dependencies only (doesn't run the model)"
@@ -131,17 +131,18 @@ case $choice in
         ;;
     3)
         echo ""
-        echo "Running in TPU forced mode (may crash)"
-        echo "Will attempt to use TPU acceleration"
+        echo "Running in TPU forced mode with FULL PROCESSING (may crash)"
+        echo "Will attempt to use TPU acceleration with complete model training"
+        echo "This mode performs full-scale training with more folds, epochs, and hyperparameter tuning"
         # Set SafeTPU environment variable to prevent SIGABRT
         export XLA_FLAGS="--xla_cpu_enable_xprof=false"
         export ALGONBA_FORCE_TPU=1
         # Use less aggressive TPU initialization
         export ALGONBA_SAFE_TPU=1
-        # Use very small batch size to avoid topology error
-        export ALGONBA_MAX_BATCH_SIZE=128
-        # Try different Python versions
-        python3.8 main.py --use-tpu --quick "$@" || python3 main.py --use-tpu --quick "$@" || python main.py --use-tpu --quick "$@"
+        # Use moderate batch size to avoid topology error but enable full processing
+        export ALGONBA_MAX_BATCH_SIZE=256
+        # Try different Python versions - Using full mode (no --quick flag)
+        python3.8 main.py --use-tpu "$@" || python3 main.py --use-tpu "$@" || python main.py --use-tpu "$@"
         ;;
     4)
         echo ""
