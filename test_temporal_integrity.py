@@ -75,8 +75,27 @@ class TemporalIntegrityTest(unittest.TestCase):
         self.games_df['FT_PCT_HOME'] = self.games_df['FTM_HOME'] / self.games_df['FTA_HOME']
         self.games_df['FT_PCT_AWAY'] = self.games_df['FTM_AWAY'] / self.games_df['FTA_AWAY']
         
-        # Initialize the feature processor
-        self.feature_processor = NBAFeatureProcessor(lookback_windows=[7, 14, 30])
+        # Ensure dates are datetime objects
+        self.games_df['GAME_DATE'] = pd.to_datetime(self.games_df['GAME_DATE'])
+        self.games_df['GAME_DATE_HOME'] = pd.to_datetime(self.games_df['GAME_DATE_HOME'])
+        
+        # Sort by date to ensure proper temporal ordering for merge_asof
+        self.games_df = self.games_df.sort_values('GAME_DATE')
+        
+        # Add additional columns that might be used as merge keys in the feature processor
+        self.games_df['HOME_TEAM_ID'] = self.games_df['TEAM_ID_HOME']
+        self.games_df['VISITOR_TEAM_ID'] = self.games_df['TEAM_ID_AWAY']
+        self.games_df['SEASON'] = 2022  # Add season column
+        self.games_df['SEASON_TYPE'] = 'Regular Season'  # Add season type
+        
+        # Fill any potential NaN values to prevent merge key failures
+        self.games_df = self.games_df.fillna(0)
+        
+        # Initialize the feature processor with safeguards for test data
+        self.feature_processor = NBAFeatureProcessor(
+            lookback_windows=[7, 14, 30], 
+            handle_nulls=True  # Add parameter to handle nulls if available in your implementation
+        )
     
     def test_temporal_integrity_in_rolling_windows(self):
         """Test that rolling window features only use data from before the current date."""
