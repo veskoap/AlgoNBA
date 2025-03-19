@@ -873,6 +873,23 @@ class NBAFeatureProcessor:
             print("Created minimal feature set with default values")
             return min_features
             
+        # Create a copy of the games DataFrame to avoid modifying the original
+        games = games.copy()
+        
+        # Fill NaN values in key columns to prevent merge errors
+        # Identify columns that could be merge keys
+        key_cols = [col for col in games.columns if any(term in col for term in ['ID', 'DATE'])]
+        
+        # Fill NaN values in key columns
+        for col in key_cols:
+            if col in games.columns:
+                # For ID columns, fill with 0
+                if 'ID' in col:
+                    games[col] = games[col].fillna(0)
+                # For DATE columns, fill with a default date
+                elif 'DATE' in col:
+                    games[col] = pd.to_datetime(games[col], errors='coerce').fillna(pd.Timestamp('2020-01-01'))
+                    
         # Initialize features DataFrame and ensure proper sorting
         features = pd.DataFrame()
         
@@ -892,6 +909,12 @@ class NBAFeatureProcessor:
             
         features['TEAM_ID_HOME'] = games['TEAM_ID_HOME']
         features['TEAM_ID_AWAY'] = games['TEAM_ID_AWAY']
+        
+        # Ensure these columns don't have NaN values
+        features['TEAM_ID_HOME'] = features['TEAM_ID_HOME'].fillna(0)
+        features['TEAM_ID_AWAY'] = features['TEAM_ID_AWAY'].fillna(0)
+        features['GAME_DATE'] = pd.to_datetime(features['GAME_DATE'], errors='coerce').fillna(pd.Timestamp('2020-01-01'))
+            
         features['TARGET'] = (games['WL_HOME'] == 'W').astype(int)
         
         # Add GAME_ID for merging with other data sources
@@ -1010,6 +1033,10 @@ class NBAFeatureProcessor:
         # CRITICAL: Ensure proper temporal sorting before any calculations that depend on order
         team_games = team_games.sort_values(['TEAM_ID', 'GAME_DATE'])
         
+        # Fill NaN values in TEAM_ID and GAME_DATE to prevent merge_asof errors
+        team_games['TEAM_ID'] = team_games['TEAM_ID'].fillna(0)
+        team_games['GAME_DATE'] = pd.to_datetime(team_games['GAME_DATE'], errors='coerce').fillna(pd.Timestamp('2020-01-01'))
+        
         # Calculate rest days for each team
         team_games['REST_DAYS'] = team_games.groupby('TEAM_ID')['GAME_DATE'].diff().dt.days.fillna(7)
         
@@ -1018,6 +1045,16 @@ class NBAFeatureProcessor:
         rest_days_away = rest_days_home.copy()
         rest_days_home.columns = ['TEAM_ID_HOME', 'GAME_DATE', 'REST_DAYS_HOME']
         rest_days_away.columns = ['TEAM_ID_AWAY', 'GAME_DATE', 'REST_DAYS_AWAY']
+        
+        # Ensure no NaN values in merge keys for home rest days
+        rest_days_home['TEAM_ID_HOME'] = rest_days_home['TEAM_ID_HOME'].fillna(0)
+        rest_days_home['GAME_DATE'] = pd.to_datetime(rest_days_home['GAME_DATE'], errors='coerce').fillna(pd.Timestamp('2020-01-01'))
+        rest_days_home['REST_DAYS_HOME'] = rest_days_home['REST_DAYS_HOME'].fillna(7)
+        
+        # Ensure no NaN values in merge keys for away rest days
+        rest_days_away['TEAM_ID_AWAY'] = rest_days_away['TEAM_ID_AWAY'].fillna(0)
+        rest_days_away['GAME_DATE'] = pd.to_datetime(rest_days_away['GAME_DATE'], errors='coerce').fillna(pd.Timestamp('2020-01-01'))
+        rest_days_away['REST_DAYS_AWAY'] = rest_days_away['REST_DAYS_AWAY'].fillna(7)
         
         # Merge rest days into features - CRITICAL: Use merge_asof with backward direction
         # to ensure we only use data from before the current game date
@@ -1093,6 +1130,10 @@ class NBAFeatureProcessor:
             rolling_stats = rolling_stats.reset_index()
             rolling_stats['GAME_DATE'] = pd.to_datetime(rolling_stats['GAME_DATE'])
             
+            # Fill NaN values in key fields for rolling_stats
+            rolling_stats['TEAM_ID'] = rolling_stats['TEAM_ID'].fillna(0)
+            rolling_stats['GAME_DATE'] = pd.to_datetime(rolling_stats['GAME_DATE'], errors='coerce').fillna(pd.Timestamp('2020-01-01'))
+            
             # CRITICAL FIX: Calculate fatigue (games in last 7 days) with closed='left'
             games_last_7 = stats_df.groupby('TEAM_ID').rolling('7D', closed='left').count()['WIN']
             rolling_stats['FATIGUE'] = games_last_7.reset_index()['WIN']
@@ -1152,6 +1193,18 @@ class NBAFeatureProcessor:
             else:
                 # If no weekend games at all, use overall win percentage
                 rolling_stats['WEEKEND_WIN_PCT'] = rolling_stats['WIN_mean']
+            
+            # Fill any remaining NaN values in rolling_stats
+            for col in rolling_stats.columns:
+                if col not in ['TEAM_ID', 'GAME_DATE']:
+                    if 'mean' in col:
+                        rolling_stats[col] = rolling_stats[col].fillna(0.5)
+                    elif 'count' in col:
+                        rolling_stats[col] = rolling_stats[col].fillna(0)
+                    elif 'std' in col:
+                        rolling_stats[col] = rolling_stats[col].fillna(0)
+                    else:
+                        rolling_stats[col] = rolling_stats[col].fillna(0)
             
             # Create separate home and away stats
             home_stats = rolling_stats.copy()
@@ -1214,8 +1267,11 @@ class NBAFeatureProcessor:
             how='left'
         )
         
+        # Fill any remaining NaN values
+        features = features.fillna(0)
+        
         # Fix any problematic DataFrame columns before returning
-        features = fix_dataframe_columns(features.fillna(0))
+        features = fix_dataframe_columns(features)
         
         # Add a final verification step for temporal integrity
         if 'GAME_DATE' in features.columns:
