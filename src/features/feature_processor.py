@@ -1700,6 +1700,7 @@ class NBAFeatureProcessor:
     def calculate_seasonal_trends(self, games: pd.DataFrame) -> pd.DataFrame:
         """
         Calculate seasonal trend adjustments with enhanced exponential decay weighting.
+        FIXED: Removed target leakage from PLUS_MINUS and other end-game statistics
         
         Args:
             games: DataFrame containing merged home/away game data
@@ -1741,65 +1742,24 @@ class NBAFeatureProcessor:
                 weights = weights / weights.sum()
 
                 for team_type in ['HOME', 'AWAY']:
-                    # Offensive trends with exponential decay
-                    # Add closed='left' parameter to explicitly exclude current day's data
+                    # FIXED: Only use pre-game statistics for trends
+                    # Removed PLUS_MINUS-based win trend calculations
+                    # Only use offensive trends from historical games, not current game
                     seasonal_trends[f'TREND_SCORE_{team_type}_{window}D'] = (
-                        games.groupby('TEAM_ID_' + team_type)['PTS_' + team_type]
-                        .rolling(window, min_periods=max(1, window//5), closed='left')  # Prevent data leakage
-                        .apply(lambda x: np.average(x, weights=weights[-len(x):]) if len(x) > 0 else np.nan)
-                        .reset_index(0, drop=True)
-                    )
-
-                    # Win trends with exponential decay (based on PLUS_MINUS as a proxy for dominance)
-                    # Add closed='left' parameter to explicitly exclude current day's data
-                    seasonal_trends[f'TREND_WIN_{team_type}_{window}D'] = (
-                        games.groupby('TEAM_ID_' + team_type)['PLUS_MINUS_' + team_type]
-                        .rolling(window, min_periods=max(1, window//5), closed='left')  # Prevent data leakage
+                        games.groupby('TEAM_ID_' + team_type)['FG_PCT_' + team_type]  # Changed from PTS to FG_PCT
+                        .rolling(window, min_periods=max(1, window//5), closed='left')  # closed='left' prevents data leakage
                         .apply(lambda x: np.average(x, weights=weights[-len(x):]) if len(x) > 0 else np.nan)
                         .reset_index(0, drop=True)
                     )
                     
-                    # Efficiency trends (points per possession proxy)
-                    if all(col in games.columns for col in [f'PTS_{team_type}', f'TOV_{team_type}', f'FGA_{team_type}']):
-                        # Calculate points per possession for each game
-                        ppp = games[f'PTS_{team_type}'] / (games[f'FGA_{team_type}'] - games[f'TOV_{team_type}'] + 0.001)
-                        
-                        # Fix efficiency trends to ensure proper temporal data handling
-                        # Sort games by date first for each team
-                        team_indices = games.groupby('TEAM_ID_' + team_type).indices
-                        trend_values = {}
-                        
-                        for team_id, indices in team_indices.items():
-                            # Get the team's games and PPP values, sorted by date
-                            team_games = games.loc[indices].sort_values(game_date_col)
-                            team_dates = pd.to_datetime(team_games[game_date_col])
-                            team_ppp = ppp.loc[indices].reset_index(drop=True)
-                            
-                            # Calculate rolling weighted average for each game
-                            for i in range(len(team_games)):
-                                game_idx = team_games.index[i]
-                                current_date = team_dates.iloc[i]
-                                
-                                # Get previous window days' games (not including current game)
-                                window_start_date = current_date - pd.Timedelta(days=window)
-                                prev_game_mask = (team_dates < current_date) & (team_dates >= window_start_date)
-                                
-                                if prev_game_mask.sum() > 0:
-                                    prev_games_idx = np.where(prev_game_mask)[0]
-                                    prev_ppp = team_ppp.iloc[prev_games_idx].values
-                                    
-                                    # Apply weights to previous games
-                                    use_weights = weights[-len(prev_ppp):] if len(prev_ppp) > 0 else np.ones(1)
-                                    use_weights = use_weights / use_weights.sum()  # Normalize
-                                    
-                                    # Calculate weighted average
-                                    trend_values[game_idx] = np.average(prev_ppp, weights=use_weights) if len(prev_ppp) > 0 else np.nan
-                                else:
-                                    trend_values[game_idx] = np.nan
-                        
-                        # Create Series from trend values and add to seasonal_trends
-                        trend_series = pd.Series(trend_values)
-                        seasonal_trends[f'TREND_EFF_{team_type}_{window}D'] = trend_series
+                    # FIXED: Removed win trends based on PLUS_MINUS as they directly leak the target
+                    # Instead use historical field goal percentage as a proxy for team strength
+                    seasonal_trends[f'TREND_FG_{team_type}_{window}D'] = (
+                        games.groupby('TEAM_ID_' + team_type)['FG_PCT_' + team_type]
+                        .rolling(window, min_periods=max(1, window//5), closed='left')
+                        .apply(lambda x: np.average(x, weights=weights[-len(x):]) if len(x) > 0 else np.nan)
+                        .reset_index(0, drop=True)
+                    )
 
             # Add season segment indicators
             games['SEASON_SEGMENT'] = pd.cut(
@@ -1962,6 +1922,22 @@ class NBAFeatureProcessor:
             print("Removing these columns to prevent data leakage!")
             enhanced_features = enhanced_features.drop(columns=potential_leakage_columns)
             
+        # ENHANCED LEAKAGE CHECK: More comprehensive check for any features that might leak the target
+        leakage_keywords = [
+            'TARGET', 'RESULT', 'OUTCOME', 'WINNER', 'WL_', 'HOME_WIN', 'AWAY_WIN',
+            'PLUS_MINUS', 'PTS_HOME', 'PTS_AWAY', 'TREND_WIN', 'MARGIN'
+        ]
+        
+        potential_leakage_columns = [col for col in enhanced_features.columns if any(
+            leak_word in col.upper() for leak_word in leakage_keywords
+        )]
+        
+        if potential_leakage_columns:
+            print(f"WARNING: Found {len(potential_leakage_columns)} columns that might contain target leakage:")
+            print(f"Leaking columns: {potential_leakage_columns}")
+            print("Removing these columns to prevent data leakage!")
+            enhanced_features = enhanced_features.drop(columns=potential_leakage_columns)
+        
         # Additional check for temporal leakage - ensure no column contains future information
         if 'GAME_DATE' in enhanced_features.columns:
             # Sort by date to ensure proper temporal order
