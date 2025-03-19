@@ -68,16 +68,30 @@ class HybridModel:
         
         print("Training hybrid prediction model...")
         
-        # Sort by date first to ensure correct temporal ordering
+        # Sort by date first to ensure correct temporal ordering - CRITICAL for preventing data leakage
         if 'GAME_DATE' in X.columns:
             X = X.sort_values('GAME_DATE').copy()
             print("Data sorted by GAME_DATE to ensure proper temporal ordering")
         else:
             print("Warning: GAME_DATE not found in dataset. Assuming data is already in temporal order.")
         
-        # Create dedicated holdout set for weight optimization
-        # Use temporal split (not random) to maintain time series integrity
-        X_train, X_weight_opt = train_test_split(X, test_size=0.15, shuffle=False)
+        # CRITICAL FIX: Create dedicated holdout set for weight optimization using TEMPORAL split (not random)
+        # Use strict time-based split with no overlap instead of train_test_split with shuffle=False 
+        # which can still introduce leakage in specific cases
+        if 'GAME_DATE' in X.columns:
+            # Find date that gives ~15% of data for weight optimization
+            dates = pd.to_datetime(X['GAME_DATE'])
+            split_idx = int(len(X) * 0.85)  # 85% for training, 15% for weight optimization
+            split_date = dates.iloc[split_idx]
+            
+            # Create strict temporal splits
+            X_train = X[dates < split_date].copy()
+            X_weight_opt = X[dates >= split_date].copy()
+            
+            print(f"Temporal split at date: {split_date}")
+        else:
+            # Fallback to train_test_split if no date column available
+            X_train, X_weight_opt = train_test_split(X, test_size=0.15, shuffle=False)
         
         print(f"Training data shape: {X_train.shape}, Weight optimization data shape: {X_weight_opt.shape}")
         
@@ -86,6 +100,8 @@ class HybridModel:
             train_end_date = X_train['GAME_DATE'].max()
             opt_start_date = X_weight_opt['GAME_DATE'].min()
             print(f"Training set end date: {train_end_date}, Weight optimization start date: {opt_start_date}")
+            
+            # Add extra verification to ensure absolutely no temporal overlap
             if train_end_date >= opt_start_date:
                 print("WARNING: Detected temporal overlap between training and weight optimization sets!")
                 # Convert to datetime for proper temporal operations
@@ -103,7 +119,7 @@ class HybridModel:
                     print(f"New weight optimization start date: {X_weight_opt['GAME_DATE'].min()}")
                 else:
                     print("ERROR: Unable to fix temporal overlap - insufficient data for weight optimization!")
-                    # Fall back to using a small portion of training data (not ideal but better than nothing)
+                    # Fall back to using a small portion of training data with strict temporal ordering
                     X_train = X_train.sort_values('GAME_DATE')
                     split_idx = int(len(X_train) * 0.8)
                     X_weight_opt = X_train.iloc[split_idx:].copy()

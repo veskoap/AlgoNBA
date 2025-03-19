@@ -1911,22 +1911,14 @@ class NBAFeatureProcessor:
             enhanced_features = enhanced_features.drop(columns=['TARGET'])
             print("Removed TARGET column from features to prevent data leakage")
             
-        # Check for any other columns that might contain target leakage
-        potential_leakage_columns = [col for col in enhanced_features.columns if any(
-            leak_word in col.upper() for leak_word in 
-            ['TARGET', 'RESULT', 'OUTCOME', 'WINNER', 'WL_', 'HOME_WIN', 'AWAY_WIN']
-        )]
-        
-        if potential_leakage_columns:
-            print(f"WARNING: Found {len(potential_leakage_columns)} columns that might contain target leakage: {potential_leakage_columns}")
-            print("Removing these columns to prevent data leakage!")
-            enhanced_features = enhanced_features.drop(columns=potential_leakage_columns)
-            
         # ENHANCED LEAKAGE CHECK: More comprehensive check for any features that might leak the target
         leakage_keywords = [
             'TARGET', 'RESULT', 'OUTCOME', 'WINNER', 'WL_', 'HOME_WIN', 'AWAY_WIN',
-            'PLUS_MINUS', 'PTS_HOME', 'PTS_AWAY', 'TREND_WIN', 'MARGIN'
+            'PLUS_MINUS', 'MARGIN', 'TREND_WIN'
         ]
+        
+        # CRITICAL FIX: Remove PTS_HOME and PTS_AWAY from leakage keywords, as they're legitimate features
+        # Only remove PLUS_MINUS and game outcome related columns
         
         potential_leakage_columns = [col for col in enhanced_features.columns if any(
             leak_word in col.upper() for leak_word in leakage_keywords

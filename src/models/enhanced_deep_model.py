@@ -790,13 +790,13 @@ class EnhancedDeepModelTrainer:
         """
         print("\nTraining enhanced deep neural network model...")
         
-        # Ensure temporal ordering of data
+        # Ensure temporal ordering of data - CRITICAL for proper cross-validation
         if 'GAME_DATE' in X.columns:
             X = X.sort_values('GAME_DATE').copy()
             print("Data sorted by GAME_DATE to ensure proper temporal ordering")
         else:
             print("Warning: GAME_DATE not found in dataset. Assuming data is already in temporal order.")
-
+        
         # Extract target variable
         y = X['TARGET']
         X_features = X.drop(['TARGET'], axis=1, errors='ignore')
@@ -813,58 +813,104 @@ class EnhancedDeepModelTrainer:
         
         # Store original feature names for later prediction
         self.training_features = X_features.columns.tolist()
-
         print(f"Training deep model with {len(X_features)} samples and {len(X_features.columns)} features")
         print(f"Using device: {self.device}")
         print(f"Architecture: Residual={self.use_residual}, Attention={self.use_attention}, MC Dropout={self.use_mc_dropout}")
-
+        
         models = []
         scalers = []
         fold_metrics = []
+        
+        # Create time series cross-validation split with proper temporal separation
         tscv = TimeSeriesSplit(n_splits=self.n_folds)
         
-        # Check temporal integrity of TimeSeriesSplit
+        # Check temporal integrity of TimeSeriesSplit and fix issues
         if game_dates is not None:
             print("Verifying temporal integrity of TimeSeriesSplit folds...")
+            modified_folds = []
+            
             for fold, (train_idx, val_idx) in enumerate(tscv.split(X_features), 1):
                 train_dates = game_dates.iloc[train_idx]
                 val_dates = game_dates.iloc[val_idx]
                 
-                train_max = train_dates.max()
-                val_min = val_dates.min()
+                train_max = pd.to_datetime(train_dates.max())
+                val_min = pd.to_datetime(val_dates.min())
                 
                 print(f"Fold {fold}: Train end date: {train_max}, Validation start date: {val_min}")
+                
+                # Check for temporal overlap
                 if train_max >= val_min:
+                    print(f"WARNING: Detected temporal overlap in fold {fold}!")
                     # Add one day buffer to ensure strict temporal separation
-                    val_dates = pd.to_datetime(val_dates)
-                    buffer_date = pd.to_datetime(train_max) + pd.Timedelta(days=1)
+                    buffer_date = train_max + pd.Timedelta(days=1)
                     
                     # Filter validation indices to only include dates after buffer date
-                    valid_val_idx = val_idx[val_dates > buffer_date]
+                    val_dates_pd = pd.to_datetime(val_dates)
+                    valid_val_idx = val_idx[val_dates_pd > buffer_date]
                     
                     if len(valid_val_idx) > 0:
                         # Replace validation indices with temporally safe subset
+                        print(f"Fixed temporal overlap. New validation set has {len(valid_val_idx)} samples")
                         val_idx = valid_val_idx
-                        val_min = val_dates[val_dates > buffer_date].min()
-                        print(f"Fixed temporal overlap. New validation start date: {val_min}")
+                        val_min = val_dates[val_dates_pd > buffer_date].min()
+                        print(f"New validation start date: {val_min}")
                     else:
-                        print(f"WARNING: Unable to fix temporal overlap in fold {fold} - insufficient data")
+                        print(f"ERROR: Unable to fix temporal overlap in fold {fold} - insufficient data for validation")
+                        # Skip this fold if we can't fix it properly
+                        continue
                 else:
-                    print(f"Fold {fold} temporal integrity verified")
-                    
-            # Use X_features instead of X for training to ensure we don't have GAME_DATE column
-            X = X_features
-
-        for fold, (train_idx, val_idx) in enumerate(tscv.split(X), 1):
+                    print(f"Fold {fold} temporal integrity verified ✓")
+                
+                # Store verified indices
+                modified_folds.append((train_idx, val_idx))
+            
+            # Replace original splits with verified splits
+            if not modified_folds:
+                # If we couldn't create any valid folds, create a fallback split
+                print("WARNING: No valid folds after temporal verification. Creating fallback split.")
+                total_samples = len(X_features)
+                train_size = int(total_samples * 0.8)
+                train_idx = np.arange(train_size)
+                val_idx = np.arange(train_size, total_samples)
+                modified_folds = [(train_idx, val_idx)]
+                
+            print(f"Created {len(modified_folds)} temporally valid cross-validation folds")
+        else:
+            # If we don't have dates, use the original splits but with caution
+            modified_folds = list(tscv.split(X_features))
+            print("WARNING: No date information available to verify temporal integrity of folds")
+            
+        for fold, (train_idx, val_idx) in enumerate(modified_folds, 1):
             print(f"\nTraining deep model fold {fold}...")
-
-            # Prepare data
-            X_train, X_val = X.iloc[train_idx], X.iloc[val_idx]
+            
+            # Prepare data with guaranteed temporal separation
+            X_train, X_val = X_features.iloc[train_idx], X_features.iloc[val_idx]
             y_train, y_val = y.iloc[train_idx], y.iloc[val_idx]
-
+            
             # Scale features using enhanced scaler for robustness
             feature_scaler = EnhancedScaler()
             print(f"Input feature dimensions - X_train: {X_train.shape}, X_val: {X_val.shape}")
+            
+            # Double-check for data leakage again - ensure train and val sets are independent
+            if game_dates is not None:
+                train_dates = pd.to_datetime(game_dates.iloc[train_idx])
+                val_dates = pd.to_datetime(game_dates.iloc[val_idx])
+                
+                if train_dates.max() >= val_dates.min():
+                    print(f"CRITICAL ERROR: Temporal overlap still exists in fold {fold}!")
+                    # Force separation by adjusting validation set
+                    buffer_date = train_dates.max() + pd.Timedelta(days=1)
+                    safe_val_idx = val_idx[val_dates > buffer_date]
+                    
+                    if len(safe_val_idx) > 0:
+                        print(f"Re-fixing validation set to ensure complete temporal separation")
+                        X_val = X_features.iloc[safe_val_idx]
+                        y_val = y.iloc[safe_val_idx]
+                    else:
+                        print(f"CRITICAL: Cannot fix fold {fold} - skipping to next fold")
+                        continue
+            
+            # Scale features ONLY using training data to avoid data leakage
             X_train_scaled = feature_scaler.fit_transform(X_train)
             X_val_scaled = feature_scaler.transform(X_val)
             
@@ -880,7 +926,7 @@ class EnhancedDeepModelTrainer:
             if hasattr(self, 'hidden_layers') and len(self.hidden_layers) > 0:
                 # Print the current dimensions for debugging
                 print(f"Current hidden layer dimensions: {self.hidden_layers}")
-
+                
             # Create PyTorch datasets and dataloaders for batch processing
             # Create tensors
             X_train_tensor = torch.FloatTensor(X_train_scaled)
@@ -2422,15 +2468,15 @@ class EnhancedDeepModelTrainer:
         sorted_conf = calibrated_confidence[idx]
         
         # Apply smoothing (optional - commented out since it adds complexity)
-        # window_size = min(5, len(sorted_conf) // 2)
-        # if window_size > 0:
-        #     from scipy.ndimage import uniform_filter1d
-        #     smoothed_conf = uniform_filter1d(sorted_conf, size=window_size, mode='nearest')
-        #     # Restore original order
-        #     calibrated_confidence = np.zeros_like(smoothed_conf)
-        #     calibrated_confidence[idx] = smoothed_conf
-        # else:
-        #     calibrated_confidence = calibrated_confidence
+        window_size = min(5, len(sorted_conf) // 2)
+        if window_size > 0:
+            from scipy.ndimage import uniform_filter1d
+            smoothed_conf = uniform_filter1d(sorted_conf, size=window_size, mode='nearest')
+            # Restore original order
+            calibrated_confidence = np.zeros_like(smoothed_conf)
+            calibrated_confidence[idx] = smoothed_conf
+        else:
+            calibrated_confidence = calibrated_confidence
         
         # 6. Add prediction divergence factor
         # When predictions significantly differ from average, reduce confidence
