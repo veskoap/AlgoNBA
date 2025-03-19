@@ -2,10 +2,17 @@
 
 # Script to run AlgoNBA on TPU VMs safely
 
+# Try to discover Python library path for additional import paths
+PYTHON_USER_SITE=$(python3.8 -m site --user-site 2>/dev/null || python3 -m site --user-site 2>/dev/null || python -m site --user-site 2>/dev/null)
+if [ ! -z "$PYTHON_USER_SITE" ]; then
+    echo "Adding Python user site packages to PYTHONPATH: $PYTHON_USER_SITE"
+    export PYTHONPATH=$PYTHONPATH:$PYTHON_USER_SITE
+fi
+
 # Check if dependencies are installed
 check_dependencies() {
     echo "Checking dependencies..."
-    PACKAGES="pandas numpy scikit-learn xgboost lightgbm torch nba_api geopy pytz joblib tqdm psutil requests"
+    PACKAGES="pandas numpy scikit-learn xgboost lightgbm torch nba_api geopy pytz joblib tqdm psutil requests bs4"
     MISSING=""
     
     # First try to find the right Python version
@@ -60,7 +67,43 @@ echo "6. Install dependencies only (doesn't run the model)"
 echo ""
 read -p "Enter choice [1-6] (default: 1): " choice
 
-# Check and install dependencies
+# Define function to directly install all dependencies
+install_all_dependencies() {
+    # Find the right pip version
+    if command -v pip3.8 &> /dev/null; then
+        PIP_CMD="pip3.8"
+    elif command -v pip3 &> /dev/null; then
+        PIP_CMD="pip3"
+    else
+        PIP_CMD="pip"
+    fi
+    
+    echo "Using pip command: $PIP_CMD for installing all dependencies"
+    
+    # Install all the critical packages directly (don't rely only on requirements.txt)
+    echo "Installing critical dependencies directly..."
+    $PIP_CMD install pandas numpy scikit-learn xgboost lightgbm joblib tqdm nba_api beautifulsoup4 bs4 requests geopy pytz psutil
+
+    # Also install TPU-specific PyTorch if needed
+    if [[ "$1" == "--with-torch" ]]; then
+        echo "Installing TPU-specific PyTorch..."
+        $PIP_CMD install torch==1.13.1 
+        $PIP_CMD install torch_xla[tpu]==1.13.1
+    fi
+
+    # Install from requirements file too for any missed dependencies
+    $PIP_CMD install -r requirements.txt
+
+    echo "All dependencies installed."
+}
+
+# Run dependency install for all modes except option 6
+if [[ "$choice" != "6" ]]; then
+    echo "Ensuring all dependencies are installed..."
+    install_all_dependencies
+fi
+
+# Specific dependency check
 check_dependencies
 
 case $choice in
@@ -118,9 +161,12 @@ case $choice in
     6)
         echo ""
         echo "Installing dependencies only"
-        echo "Installing all required packages from requirements.txt..."
+        echo "Installing all required packages including TPU PyTorch..."
         
-        # Find the right pip version
+        # Use our dependency installer with the TPU flag
+        install_all_dependencies --with-torch
+        
+        # Add additional packages that might be missing
         if command -v pip3.8 &> /dev/null; then
             PIP_CMD="pip3.8"
         elif command -v pip3 &> /dev/null; then
@@ -129,16 +175,13 @@ case $choice in
             PIP_CMD="pip"
         fi
         
-        echo "Using pip command: $PIP_CMD"
+        # Make sure we have bs4 specifically (sometimes beautifulsoup4 doesn't register properly)
+        echo "Installing BeautifulSoup (bs4) explicitly..."
+        $PIP_CMD install beautifulsoup4 bs4
         
-        # First install PyTorch for TPU
-        echo "Installing PyTorch for TPU..."
-        $PIP_CMD install torch==1.13.1
-        $PIP_CMD install torch_xla[tpu]==1.13.1
-        
-        # Then install the rest of the requirements
-        echo "Installing other dependencies..."
-        $PIP_CMD install -r requirements.txt
+        # Make sure the TPU packages are installed
+        echo "Making sure TPU packages are installed correctly..."
+        $PIP_CMD install torch==1.13.1 torch_xla[tpu]==1.13.1
         
         echo "Dependencies installation complete."
         exit 0
