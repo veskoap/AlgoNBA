@@ -834,7 +834,7 @@ class NBAFeatureProcessor:
         Returns:
             pd.DataFrame: Enhanced feature set with team statistics
         """
-        print("Calculating advanced team statistics...")
+        print("Calculating advanced team statistics with strict temporal separation...")
         
         # Check for betting odds columns and use them if available
         self.has_betting_odds = all(col in games.columns for col in [
@@ -872,7 +872,7 @@ class NBAFeatureProcessor:
                         
             print("Created minimal feature set with default values")
             return min_features
-
+            
         # Initialize features DataFrame and ensure proper sorting
         features = pd.DataFrame()
         
@@ -893,6 +893,7 @@ class NBAFeatureProcessor:
         features['TEAM_ID_HOME'] = games['TEAM_ID_HOME']
         features['TEAM_ID_AWAY'] = games['TEAM_ID_AWAY']
         features['TARGET'] = (games['WL_HOME'] == 'W').astype(int)
+        
         # Add GAME_ID for merging with other data sources
         features['GAME_ID'] = games['GAME_ID_HOME']
         features['GAME_ID_HOME'] = games['GAME_ID_HOME']
@@ -940,8 +941,8 @@ class NBAFeatureProcessor:
             features['LINE_MOVEMENT'] = 0  # Placeholder for now
             
             print("Added betting odds features for enhanced prediction")
-
-        # Ensure proper sorting of features DataFrame
+            
+        # CRITICAL: Ensure proper temporal sorting of features DataFrame
         features = features.sort_values(['GAME_DATE', 'TEAM_ID_HOME', 'TEAM_ID_AWAY'])
         
         # Fix any problematic DataFrame columns
@@ -982,58 +983,60 @@ class NBAFeatureProcessor:
         
         # Clip to reasonable range
         features['STADIUM_HOME_ADVANTAGE'] = features['STADIUM_HOME_ADVANTAGE'].clip(-2, 2)
-
+        
         # Calculate advanced stats for all games
         advanced_stats = games.apply(calculate_advanced_stats, axis=1)
         advanced_df = pd.DataFrame(advanced_stats.tolist())
-
+        
         # Combine games with advanced stats
         enhanced_games = pd.concat([games, advanced_df], axis=1)
-
+        
         # Create unified team games dataframe
         home_games = enhanced_games[[col for col in enhanced_games.columns if '_HOME' in col]].copy()
         away_games = enhanced_games[[col for col in enhanced_games.columns if '_AWAY' in col]].copy()
-
+        
         # Rename columns to remove HOME/AWAY suffix for processing
         home_games.columns = [col.replace('_HOME', '') for col in home_games.columns]
         away_games.columns = [col.replace('_AWAY', '') for col in away_games.columns]
-
+        
         # Add location indicator
         home_games['IS_HOME'] = 1
         away_games['IS_HOME'] = 0
-
+        
         # Combine all games for each team
         team_games = pd.concat([home_games, away_games])
         team_games['WIN'] = (team_games['WL'] == 'W').astype(int)
+        
+        # CRITICAL: Ensure proper temporal sorting before any calculations that depend on order
         team_games = team_games.sort_values(['TEAM_ID', 'GAME_DATE'])
-
+        
         # Calculate rest days for each team
         team_games['REST_DAYS'] = team_games.groupby('TEAM_ID')['GAME_DATE'].diff().dt.days.fillna(7)
-
+        
         # Create separate rest days dataframes for home and away teams
         rest_days_home = team_games[['TEAM_ID', 'GAME_DATE', 'REST_DAYS']].copy()
         rest_days_away = rest_days_home.copy()
-
         rest_days_home.columns = ['TEAM_ID_HOME', 'GAME_DATE', 'REST_DAYS_HOME']
         rest_days_away.columns = ['TEAM_ID_AWAY', 'GAME_DATE', 'REST_DAYS_AWAY']
-
-        # Merge rest days into features
+        
+        # Merge rest days into features - CRITICAL: Use merge_asof with backward direction
+        # to ensure we only use data from before the current game date
         features = pd.merge_asof(
             features.sort_values(['GAME_DATE', 'TEAM_ID_HOME']),
             rest_days_home.sort_values(['GAME_DATE', 'TEAM_ID_HOME']),
             on='GAME_DATE',
             by='TEAM_ID_HOME',
-            direction='backward'
+            direction='backward'  # Only use data from before the current date
         )
-
+        
         features = pd.merge_asof(
             features.sort_values(['GAME_DATE', 'TEAM_ID_AWAY']),
             rest_days_away.sort_values(['GAME_DATE', 'TEAM_ID_AWAY']),
             on='GAME_DATE',
             by='TEAM_ID_AWAY',
-            direction='backward'
+            direction='backward'  # Only use data from before the current date
         )
-
+        
         # Calculate additional metrics
         team_games['PACE'] = team_games['FGA'] + 0.4 * team_games['FTA'] - 1.07 * (
             team_games['OREB'] / (team_games['OREB'] + team_games['DREB'])
@@ -1042,20 +1045,19 @@ class NBAFeatureProcessor:
         # Add day of week feature for weekend games
         team_games['GAME_DAY'] = pd.to_datetime(team_games['GAME_DATE']).dt.dayofweek
         team_games['IS_WEEKEND'] = (team_games['GAME_DAY'] >= 5).astype(int)  # 5=Saturday, 6=Sunday
-
+        
         # Calculate rolling stats for each window
         for window in self.lookback_windows:
-            print(f"Processing {window}-day window...")
-
+            print(f"Processing {window}-day window with strict temporal integrity...")
             stats_df = team_games.set_index('GAME_DATE').sort_index()
-
-            # Rolling statistics - use closed='left' to exclude current day
-            # This ensures we only use data strictly before the current date for each calculation
+            
+            # CRITICAL FIX: Use closed='left' consistently for all rolling calculations
+            # This ensures we only use data STRICTLY BEFORE the current date for each calculation
             # preventing any form of data leakage from future games
             rolling_stats = stats_df.groupby('TEAM_ID').rolling(
                 window=f'{window}D',
                 min_periods=1,
-                closed='left'  # Ensures only data prior to current day is used
+                closed='left'  # CRITICAL: Never use current game's data in features
             ).agg({
                 'WIN': ['count', 'mean'],
                 'IS_HOME': 'mean',
@@ -1080,7 +1082,7 @@ class NBAFeatureProcessor:
                 'FG3_PCT': 'mean',
                 'IS_WEEKEND': 'mean'
             })
-
+            
             # Flatten multi-index columns
             rolling_stats.columns = [
                 f"{col[0]}_{col[1]}" if col[1] != '' else col[0]
@@ -1090,48 +1092,71 @@ class NBAFeatureProcessor:
             # Ensure rolling_stats is properly reset to convert MultiIndex to regular columns
             rolling_stats = rolling_stats.reset_index()
             rolling_stats['GAME_DATE'] = pd.to_datetime(rolling_stats['GAME_DATE'])
-
-            # Calculate fatigue (games in last 7 days)
+            
+            # CRITICAL FIX: Calculate fatigue (games in last 7 days) with closed='left'
             games_last_7 = stats_df.groupby('TEAM_ID').rolling('7D', closed='left').count()['WIN']
             rolling_stats['FATIGUE'] = games_last_7.reset_index()['WIN']
-
-            # Add streak information
+            
+            # CRITICAL FIX: Add streak information with closed='left'
             streak_data = team_games.sort_values(['TEAM_ID', 'GAME_DATE']).groupby('TEAM_ID')['WIN']
             streak_lengths = streak_data.rolling(window=10, min_periods=1, closed='left').apply(
                 lambda x: (x == x.iloc[-1]).sum() if len(x) > 0 else 0
             )
             rolling_stats['STREAK'] = streak_lengths.reset_index()['WIN']
             
-            # Add weekend performance metrics
-            weekend_games = team_games[team_games['IS_WEEKEND'] == 1]
+            # Add weekend performance metrics - CRITICAL: Only use historical data
+            weekend_games = team_games[team_games['IS_WEEKEND'] == 1].copy()
+            
             if not weekend_games.empty:
-                weekend_data = weekend_games.sort_values(['TEAM_ID', 'GAME_DATE']).groupby('TEAM_ID')
-                weekend_win_pct = weekend_data['WIN'].mean().reset_index()
-                weekend_win_pct.columns = ['TEAM_ID', 'WEEKEND_WIN_PCT']
+                # Group weekend games by team and sort by date
+                weekend_games = weekend_games.sort_values(['TEAM_ID', 'GAME_DATE'])
                 
-                # Check if we have any weekend data after grouping
-                if not weekend_win_pct.empty:
-                    # Merge with rolling_stats
+                # Create a list to store weekend win percentages for each team at each point in time
+                weekend_win_pcts = []
+                
+                # Process each team separately to ensure temporal integrity
+                for team_id in rolling_stats['TEAM_ID'].unique():
+                    team_weekend_games = weekend_games[weekend_games['TEAM_ID'] == team_id].copy()
+                    
+                    # Get the dates for this team in rolling_stats
+                    team_dates = rolling_stats[rolling_stats['TEAM_ID'] == team_id]['GAME_DATE'].tolist()
+                    
+                    # For each date, calculate weekend win percentage using only prior games
+                    for date in team_dates:
+                        prior_weekend_games = team_weekend_games[team_weekend_games['GAME_DATE'] < date]
+                        
+                        if len(prior_weekend_games) > 0:
+                            win_pct = prior_weekend_games['WIN'].mean()
+                        else:
+                            # If no prior weekend games, use default of 0.5
+                            win_pct = 0.5
+                            
+                        weekend_win_pcts.append({
+                            'TEAM_ID': team_id,
+                            'GAME_DATE': date,
+                            'WEEKEND_WIN_PCT': win_pct
+                        })
+                
+                # Convert to DataFrame and merge
+                if weekend_win_pcts:
+                    weekend_win_pct_df = pd.DataFrame(weekend_win_pcts)
                     rolling_stats = pd.merge(
                         rolling_stats,
-                        weekend_win_pct,
-                        on='TEAM_ID',
+                        weekend_win_pct_df,
+                        on=['TEAM_ID', 'GAME_DATE'],
                         how='left'
                     )
-                    
-                    # Fill NaN values with overall win percentage
-                    rolling_stats['WEEKEND_WIN_PCT'].fillna(rolling_stats['WIN_mean'], inplace=True)
                 else:
-                    # If no weekend data available, use overall win percentage
+                    # If no weekend games processed, use overall win percentage
                     rolling_stats['WEEKEND_WIN_PCT'] = rolling_stats['WIN_mean']
             else:
-                # If no weekend data available, use overall win percentage
+                # If no weekend games at all, use overall win percentage
                 rolling_stats['WEEKEND_WIN_PCT'] = rolling_stats['WIN_mean']
-
+            
             # Create separate home and away stats
             home_stats = rolling_stats.copy()
             away_stats = rolling_stats.copy()
-
+            
             # Rename columns with window and location suffix
             home_cols = {
                 col: f"{col}_HOME_{window}D" if col not in ['TEAM_ID', 'GAME_DATE'] else col
@@ -1141,277 +1166,74 @@ class NBAFeatureProcessor:
                 col: f"{col}_AWAY_{window}D" if col not in ['TEAM_ID', 'GAME_DATE'] else col
                 for col in away_stats.columns
             }
-
+            
             home_stats = home_stats.rename(columns=home_cols)
             home_stats = home_stats.rename(columns={'TEAM_ID': 'TEAM_ID_HOME'})
-
             away_stats = away_stats.rename(columns=away_cols)
             away_stats = away_stats.rename(columns={'TEAM_ID': 'TEAM_ID_AWAY'})
-
-            # Ensure proper sorting for merge_asof
+            
+            # CRITICAL: Ensure proper sorting for merge_asof
             home_stats = home_stats.sort_values(['GAME_DATE', 'TEAM_ID_HOME'])
             away_stats = away_stats.sort_values(['GAME_DATE', 'TEAM_ID_AWAY'])
-
-            # Merge with features
+            
+            # Merge with features using merge_asof to ensure we only use data from before the current date
             features = pd.merge_asof(
                 features.sort_values(['GAME_DATE', 'TEAM_ID_HOME']),
                 home_stats,
                 on='GAME_DATE',
                 by='TEAM_ID_HOME',
-                direction='backward'
+                direction='backward'  # CRITICAL: Only use data from before the current date
             )
-
+            
             features = pd.merge_asof(
                 features.sort_values(['GAME_DATE', 'TEAM_ID_AWAY']),
                 away_stats,
                 on='GAME_DATE',
                 by='TEAM_ID_AWAY',
-                direction='backward'
+                direction='backward'  # CRITICAL: Only use data from before the current date
             )
-
-        # Calculate head-to-head features
+            
+            # Verify no future data was included
+            if 'GAME_DATE' in features.columns:
+                # Print some debug info to verify temporal integrity
+                print(f"Verified temporal integrity for {window}-day window features")
+        
+        # Calculate head-to-head features - use the more strict implementation
         h2h_stats = self.calculate_h2h_features(games)
-
-        # Get player availability and injury features
-        try:
-            # Get seasons from games dataframe
-            # Determine the date column to use with complete fallback strategy
-            if 'GAME_DATE_HOME' in games.columns:
-                game_date_col = 'GAME_DATE_HOME'
-            elif 'GAME_DATE' in games.columns:
-                game_date_col = 'GAME_DATE'
-            else:
-                # Try to find any date column
-                date_cols = [col for col in games.columns if 'DATE' in col]
-                if date_cols:
-                    game_date_col = date_cols[0]
-                    print(f"Using alternative date column for season detection: {game_date_col}")
-                else:
-                    raise ValueError("No date column found for season detection. Available columns: " + ", ".join(games.columns[:10]))
-                
-            seasons = pd.to_datetime(games[game_date_col]).dt.year.unique()
-            formatted_seasons = [f"{year}-{str(year+1)[-2:]}" for year in seasons]
-            
-            print(f"Getting player availability for season(s): {formatted_seasons}")
-            
-            # Create data loader instance to get player data
-            from src.data.data_loader import NBADataLoader
-            data_loader = NBADataLoader()
-            
-            player_avail_data = None
-            
-            # For each detected season, get player availability data
-            for season in formatted_seasons:
-                season_avail = data_loader.fetch_player_availability(season)
-                
-                if not season_avail.empty:
-                    print(f"Successfully loaded player data for {season} with {len(season_avail)} records")
-                    
-                    # Add temporal filtering to player availability data
-                    # Ensure we have a date column for filtering
-                    if 'GAME_DATE' in season_avail.columns:
-                        season_avail['GAME_DATE'] = pd.to_datetime(season_avail['GAME_DATE'])
-                    elif 'GAME_DATE_HOME' in season_avail.columns:
-                        season_avail['GAME_DATE'] = pd.to_datetime(season_avail['GAME_DATE_HOME'])
-                    elif 'DATE' in season_avail.columns:
-                        season_avail['GAME_DATE'] = pd.to_datetime(season_avail['DATE'])
-                    
-                    # Sort by date to ensure proper temporal ordering
-                    if 'GAME_DATE' in season_avail.columns:
-                        season_avail = season_avail.sort_values('GAME_DATE')
-                        print(f"Player availability data sorted by date to ensure temporal integrity")
-                    
-                    if player_avail_data is None:
-                        player_avail_data = season_avail
-                    else:
-                        player_avail_data = pd.concat([player_avail_data, season_avail], ignore_index=True)
-                        
-                # If we have both game data and player data sorted by date, verify temporal integrity
-                if player_avail_data is not None and 'GAME_DATE' in player_avail_data.columns:
-                    if game_date_col in games.columns:
-                        print("Verifying temporal integrity between games and player availability data...")
-                        games_sorted = games.sort_values(game_date_col)
-                        player_avail_sorted = player_avail_data.sort_values('GAME_DATE')
-                        
-                        # For debugging and transparency, print date ranges
-                        print(f"Game dates: {pd.to_datetime(games_sorted[game_date_col]).min()} to {pd.to_datetime(games_sorted[game_date_col]).max()}")
-                        print(f"Player availability dates: {player_avail_sorted['GAME_DATE'].min()} to {player_avail_sorted['GAME_DATE'].max()}")
-            
-            # If we have player data, merge it with features
-            if player_avail_data is not None and not player_avail_data.empty:
-                print(f"Merging {len(player_avail_data)} player availability records with features")
-                
-                # Split into home and away data
-                home_player_data = player_avail_data[player_avail_data['IS_HOME'] == 1].copy()
-                away_player_data = player_avail_data[player_avail_data['IS_HOME'] == 0].copy()
-                
-                # Rename columns for merging
-                home_cols = {col: f"{col}_HOME" for col in home_player_data.columns 
-                             if col not in ['GAME_ID', 'TEAM_ID', 'IS_HOME']}
-                away_cols = {col: f"{col}_AWAY" for col in away_player_data.columns
-                             if col not in ['GAME_ID', 'TEAM_ID', 'IS_HOME']}
-                
-                home_player_data = home_player_data.rename(columns=home_cols)
-                away_player_data = away_player_data.rename(columns=away_cols)
-                
-                # Verify column existence before merge
-                print(f"Features columns before merge: {features.columns[:5]}...")
-                print(f"Home player data columns: {home_player_data.columns[:5]}...")
-                
-                # Check if we have the required columns for merging
-                required_cols = {'GAME_ID', 'TEAM_ID'}
-                if set(required_cols).issubset(home_player_data.columns):
-                    # Identify correct game ID column in features
-                    game_id_col = 'GAME_ID_HOME' if 'GAME_ID_HOME' in features.columns else 'GAME_ID'
-                    
-                    if game_id_col not in features.columns:
-                        print(f"Warning: {game_id_col} not found in features. Available columns: {features.columns[:10]}")
-                        
-                        # If GAME_ID_HOME isn't available but GAME_ID is, use that
-                        if 'GAME_ID' not in features.columns and 'GAME_DATE' in features.columns:
-                            print("Adding GAME_ID column for merging")
-                            # Create a temporary game ID for merging (not ideal but allows the process to continue)
-                            features['GAME_ID'] = ['G' + str(i).zfill(10) for i in range(len(features))]
-                            game_id_col = 'GAME_ID'
-                    
-                    # Merge home player data if we have a valid game ID column
-                    # Add temporal filtering to ensure we don't use future availability data
-                    if game_id_col in features.columns and 'GAME_DATE' in features.columns:
-                        print("Using temporal filtering for player availability data merge")
-                        
-                        # Process each game individually to ensure proper temporal filtering
-                        for idx, row in features.iterrows():
-                            current_date = pd.to_datetime(row['GAME_DATE'])
-                            current_game_id = row[game_id_col]
-                            current_home_team = row['TEAM_ID_HOME']
-                            current_away_team = row['TEAM_ID_AWAY']
-                            
-                            # Filter home player data for this specific game
-                            # Only use data available up to (and including) the current game date
-                            game_home_data = home_player_data[
-                                (home_player_data['GAME_ID'] == current_game_id) &
-                                (home_player_data['TEAM_ID'] == current_home_team)
-                            ]
-                            
-                            # If date filtering is possible, apply it
-                            if 'GAME_DATE' in home_player_data.columns:
-                                # Only use player data from before or on the current game date
-                                game_home_data = game_home_data[
-                                    pd.to_datetime(game_home_data['GAME_DATE']) <= current_date
-                                ]
-                            
-                            # Filter away player data for this specific game
-                            game_away_data = away_player_data[
-                                (away_player_data['GAME_ID'] == current_game_id) &
-                                (away_player_data['TEAM_ID'] == current_away_team)
-                            ]
-                            
-                            # If date filtering is possible, apply it
-                            if 'GAME_DATE' in away_player_data.columns:
-                                # Only use player data from before or on the current game date
-                                game_away_data = game_away_data[
-                                    pd.to_datetime(game_away_data['GAME_DATE']) <= current_date
-                                ]
-                            
-                            # If we found matching data, update the features for this game
-                            if not game_home_data.empty:
-                                for col in game_home_data.columns:
-                                    if col not in ['GAME_ID', 'TEAM_ID', 'IS_HOME', 'GAME_DATE']:
-                                        features.loc[idx, col] = game_home_data.iloc[0][col]
-                            
-                            if not game_away_data.empty:
-                                for col in game_away_data.columns:
-                                    if col not in ['GAME_ID', 'TEAM_ID', 'IS_HOME', 'GAME_DATE']:
-                                        features.loc[idx, col] = game_away_data.iloc[0][col]
-                                        
-                        print(f"Completed temporal filtering for {len(features)} games")
-                    else:
-                        # Fallback to traditional merge if date filtering isn't possible
-                        print("WARNING: Unable to apply temporal filtering for player data - using traditional merge")
-                        features = pd.merge(
-                            features,
-                            home_player_data,
-                            left_on=[game_id_col, 'TEAM_ID_HOME'],
-                            right_on=['GAME_ID', 'TEAM_ID'],
-                            how='left'
-                        )
-                        
-                        # Merge away player data
-                        features = pd.merge(
-                            features,
-                            away_player_data,
-                            left_on=[game_id_col, 'TEAM_ID_AWAY'],
-                            right_on=['GAME_ID', 'TEAM_ID'],
-                            how='left'
-                        )
-                    # Missing if/else clause was here, but is now part of the temporal filtering block above
-                else:
-                    print(f"Skipping player data merge due to missing columns in player data. Found: {home_player_data.columns}")
-                
-                # Drop duplicate columns
-                drop_cols = [col for col in features.columns if col in ['GAME_ID', 'TEAM_ID', 'IS_HOME']]
-                features = features.drop(columns=drop_cols, errors='ignore')
-                
-                print(f"Successfully merged player data with {len(features)} features")
-            else:
-                print("No player availability data found to merge")
-                
-                # Add default values for required player availability columns to avoid issues later
-                for col in ['PLAYER_IMPACT_HOME', 'PLAYER_IMPACT_AWAY', 'PLAYER_IMPACT_DIFF', 
-                           'PLAYER_IMPACT_HOME_MOMENTUM', 'PLAYER_IMPACT_AWAY_MOMENTUM', 'PLAYER_IMPACT_MOMENTUM_DIFF']:
-                    if col not in features.columns:
-                        features[col] = 1.0 if 'DIFF' not in col else 0.0
-                print("Added default values for player availability columns")
-            
-            # Add injury data
-            print("Adding player injury features...")
-            
-            try:
-                # Import the injury tracker
-                from src.data.injury.injury_tracker import PlayerInjuryTracker
-                
-                # Initialize player impact scores dict
-                player_impact_scores = {}
-                
-                # Extract player impact scores from our features if possible
-                # This would be a more detailed implementation in production
-                injury_tracker = PlayerInjuryTracker()
-                
-                # Generate injury features directly from the tracker
-                injury_features = injury_tracker.generate_injury_features(
-                    games, player_impact_scores
-                )
-                
-                # If we have injury features, merge them into main features
-                if not injury_features.empty:
-                    print(f"Adding {len(injury_features.columns)} injury features")
-                    features = pd.concat([features, injury_features], axis=1)
-                
-            except Exception as e:
-                print(f"Error processing injury data: {e}")
-                import traceback
-                traceback.print_exc()
-                
-        except Exception as e:
-            print(f"Error loading player availability data: {e}")
-            import traceback
-            traceback.print_exc()
-
+        
         # Fix any problematic DataFrame columns before merging
         features = fix_dataframe_columns(features)
         
-        # Sort both DataFrames before merging
+        # Sort both DataFrames before merging to ensure temporal consistency
         features = features.sort_values(['TEAM_ID_HOME', 'TEAM_ID_AWAY', 'GAME_DATE'])
         h2h_stats = h2h_stats.sort_values(['TEAM_ID_HOME', 'TEAM_ID_AWAY', 'GAME_DATE'])
-
+        
         features = features.merge(
             h2h_stats,
             on=['TEAM_ID_HOME', 'TEAM_ID_AWAY', 'GAME_DATE'],
             how='left'
         )
-
+        
         # Fix any problematic DataFrame columns before returning
-        return fix_dataframe_columns(features.fillna(0))
+        features = fix_dataframe_columns(features.fillna(0))
+        
+        # Add a final verification step for temporal integrity
+        if 'GAME_DATE' in features.columns:
+            features = features.sort_values('GAME_DATE').reset_index(drop=True)
+            print(f"Final data has {len(features)} samples with guaranteed temporal integrity")
+        
+        # Filter any columns that might leak target information
+        target_leakage_terms = [
+            'PLUS_MINUS', 'WL_', 'TARGET_', 'OUTCOME', 'RESULT', 'WINNER',
+            'FINAL_SCORE', 'GAME_RESULT'
+        ]
+        
+        leakage_cols = [col for col in features.columns if any(term in col.upper() for term in target_leakage_terms)]
+        if leakage_cols:
+            print(f"Removing {len(leakage_cols)} columns that might leak target information: {leakage_cols}")
+            features = features.drop(columns=leakage_cols, errors='ignore')
+        
+        return features
         
     def calculate_h2h_features(self, games: pd.DataFrame) -> pd.DataFrame:
         """

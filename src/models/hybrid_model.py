@@ -59,14 +59,14 @@ class HybridModel:
         
     def train(self, X: pd.DataFrame) -> None:
         """
-        Train both ensemble and deep learning models.
+        Train both ensemble and deep learning models with strict temporal integrity.
         
         Args:
             X: DataFrame containing features and target variable
         """
         from sklearn.model_selection import train_test_split
         
-        print("Training hybrid prediction model...")
+        print("Training hybrid prediction model with strict temporal integrity...")
         
         # Sort by date first to ensure correct temporal ordering - CRITICAL for preventing data leakage
         if 'GAME_DATE' in X.columns:
@@ -102,7 +102,7 @@ class HybridModel:
             print(f"Training set end date: {train_end_date}, Weight optimization start date: {opt_start_date}")
             
             # Add extra verification to ensure absolutely no temporal overlap
-            if train_end_date >= opt_start_date:
+            if pd.to_datetime(train_end_date) >= pd.to_datetime(opt_start_date):
                 print("WARNING: Detected temporal overlap between training and weight optimization sets!")
                 # Convert to datetime for proper temporal operations
                 X_weight_opt['GAME_DATE'] = pd.to_datetime(X_weight_opt['GAME_DATE'])
@@ -171,6 +171,11 @@ class HybridModel:
             # Create the flag attribute
             setattr(self.deep_model, '_in_hybrid_optimization', True)
         
+        # Sort the weight optimization data by date if available
+        if 'GAME_DATE' in X.columns:
+            X = X.sort_values('GAME_DATE').copy()
+            print("Weight optimization data sorted by date to preserve temporal order")
+        
         # Extract target from the weight optimization dataset
         y = X['TARGET']
         
@@ -192,8 +197,8 @@ class HybridModel:
         n_splits = max(2, min(5, len(X) // 300))  # Minimum of 2, maximum of 5 splits
         print(f"Using {n_splits} splits for time-series cross-validation")
         
-        # Initialize time-series cross-validation with temporal validation
-        tscv = TimeSeriesSplit(n_splits=n_splits)  # Minimum 2 splits
+        # Initialize time-series cross-validation with strict temporal validation
+        tscv = TimeSeriesSplit(n_splits=n_splits, gap=1)  # Add gap=1 to ensure no data leakage between folds
         
         # Metrics to track
         metrics = {
@@ -233,7 +238,61 @@ class HybridModel:
             # to avoid redundant computation
             fold_data = []
             
-            for _, val_idx in tscv.split(X):
+            # Verify and ensure temporal integrity of splits
+            modified_splits = []
+            
+            if 'GAME_DATE' in X.columns:
+                print("Verifying temporal integrity of cross-validation splits...")
+                
+                for fold, (train_idx, val_idx) in enumerate(tscv.split(X), 1):
+                    train_dates = pd.to_datetime(X.iloc[train_idx]['GAME_DATE'])
+                    val_dates = pd.to_datetime(X.iloc[val_idx]['GAME_DATE'])
+                    
+                    train_max = train_dates.max()
+                    val_min = val_dates.min()
+                    
+                    print(f"Fold {fold}: Train end date: {train_max}, Validation start date: {val_min}")
+                    
+                    # Check for temporal overlap
+                    if train_max >= val_min:
+                        print(f"WARNING: Detected temporal overlap in fold {fold}!")
+                        # Add one day buffer to ensure strict temporal separation
+                        buffer_date = train_max + pd.Timedelta(days=1)
+                        
+                        # Filter validation indices to only include dates after buffer date
+                        valid_val_idx = val_idx[pd.to_datetime(X.iloc[val_idx]['GAME_DATE']) > buffer_date]
+                        
+                        if len(valid_val_idx) > 0:
+                            # Replace validation indices with temporally safe subset
+                            print(f"Fixed temporal overlap. New validation set has {len(valid_val_idx)} samples")
+                            val_idx = valid_val_idx
+                            val_min = pd.to_datetime(X.iloc[val_idx]['GAME_DATE']).min()
+                            print(f"New validation start date: {val_min}")
+                        else:
+                            print(f"WARNING: Unable to fix temporal overlap in fold {fold} - skipping this fold")
+                            # Skip this fold if we can't fix it properly
+                            continue
+                    else:
+                        print(f"Fold {fold} temporal integrity verified ✓")
+                    
+                    # Store verified indices
+                    modified_splits.append((train_idx, val_idx))
+                
+                # Check if we have any valid splits after verification
+                if not modified_splits:
+                    print("WARNING: No valid folds after temporal verification. Creating fallback split...")
+                    # Create a fallback temporal split if necessary
+                    X_sorted = X.sort_values('GAME_DATE')
+                    split_point = int(len(X_sorted) * 0.8)
+                    train_idx = X_sorted.index[:split_point]
+                    val_idx = X_sorted.index[split_point:]
+                    modified_splits = [(train_idx, val_idx)]
+            else:
+                # If no date column, use original splits but warn
+                modified_splits = list(tscv.split(X))
+                print("WARNING: No date column available to verify temporal integrity of folds")
+            
+            for train_idx, val_idx in modified_splits:
                 # Use validation data for weight optimization
                 X_val = X.iloc[val_idx]
                 y_val = y.iloc[val_idx]
